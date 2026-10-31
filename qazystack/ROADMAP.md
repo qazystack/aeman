@@ -1,6 +1,6 @@
 # Fork roadmap
 
-Order matters: each step is one branch and one PR. Mark a step done here in the PR that implements it.
+Order matters: each step is one branch and one PR. The architect marks a step done here when merging it.
 
 Upstream is about to rework the domain (new entities such as Initiative and Epic). So the fork does not touch the domain,
 the board service or the storage: `pkg/board`, `pkg/boardservice`, `pkg/gitstore`, `pkg/apiserver`, `pkg/mcpserver`, the
