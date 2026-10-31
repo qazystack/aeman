@@ -23,7 +23,7 @@ already names Gitea as the next adapter). One adapter serves both Gitea and Forg
 - Why it matters: Gitea and Forgejo can themselves sign people in through any OIDC provider, so this step already gives
   single sign-on to teams that run one, without changing aeman's identity model.
 
-## 2. Helm chart — next
+## 2. Helm chart — done
 Upstream has an unmerged branch `feat/helm-chart` (`charts/aeman/`, last commit 2026-07-16, from before upstream rewrote its
 history, so it has no merge base with `main`). Start from its chart files, copied onto a branch from `upstream/main` (say so in
 the PR and in the commit message), and bring them up to date with today's flags and env (`docs/api.md` configuration table,
@@ -38,6 +38,15 @@ incl. the Gitea ones). Keep the chart at `charts/aeman/`, where upstream put it.
 - Done when: `helm lint` clean, `helm template` renders with defaults and with an Ingress, chart version and app version are
   separate fields.
 
-## 3. Generic OIDC sign-in — waiting for a decision
+## 3. CI: golangci-lint fails on the current Go 1.27 patch — next
+`ci.yml` pins golangci-lint v2.13.2 and `setup-go` installs the newest Go 1.27 patch; the linter cannot read its export data
+(`could not import internal/goarch … export data version 5 is greater than maximum supported version 4`), so the
+`golangci-lint` job fails on `main` with no code change (upstream's last green run: 2026-10-07).
+- Find the smallest fix that keeps CI reproducible: a golangci-lint release built with that Go (check its release notes),
+  or pin the Go patch in both jobs. Keep every action pinned by commit SHA.
+- Fix any new lint findings the newer linter reports, in the same PR only if they are few and mechanical; otherwise list them.
+- Done when: all `ci.yml` jobs are green on the PR. This is meant for upstream as is.
+
+## 4. Generic OIDC sign-in — waiting for a decision
 Today identity and repository rights both come from the forge. Signing in through a plain OIDC provider needs a decision on
 where rights come from (OIDC groups → domains, or still the forge). Discussed with upstream first; do not implement.
