@@ -97,13 +97,13 @@ func parseCommitter(s string) (gitstore.Identity, error) {
 
 // gitFlags holds the parsed values; config turns them into a GitConfig.
 type gitFlags struct {
-	repos                     repoList
-	reposSet                  bool
-	data, history, historyMax string
-	syncInterval, unpushed    string
-	committer, authorEmail    string
-	forge, gitlabURL          string
-	env                       func(string) string
+	repos                      repoList
+	reposSet                   bool
+	data, history, historyMax  string
+	syncInterval, unpushed     string
+	committer, authorEmail     string
+	forge, gitlabURL, giteaURL string
+	env                        func(string) string
 }
 
 // addGitFlags registers the git-mode flags on fs. env is the environment
@@ -121,8 +121,9 @@ func addGitFlags(fs *flag.FlagSet, env func(string) string) *gitFlags {
 	fs.StringVar(&g.unpushed, "unpushed-warn", "", "age of the oldest unpushed commit that turns health degraded (env AEMAN_UNPUSHED_WARN; default 5m)")
 	fs.StringVar(&g.committer, "committer", "", `committer identity "Name <email>" (env AEMAN_COMMITTER; default "aeman <aeman@localhost>")`)
 	fs.StringVar(&g.authorEmail, "author-email", "", "author email template with {login} (env AEMAN_AUTHOR_EMAIL; default {login}@aeman)")
-	fs.StringVar(&g.forge, "forge", "", "the code host the repositories live on: github or gitlab (env AEMAN_FORGE; default by the primary repository's host)")
+	fs.StringVar(&g.forge, "forge", "", "the code host the repositories live on: github, gitlab, gitea or forgejo (env AEMAN_FORGE; default by the primary repository's host)")
 	fs.StringVar(&g.gitlabURL, "gitlab-url", "", "base URL of a self-hosted GitLab, e.g. https://gitlab.example.org (env AEMAN_GITLAB_URL; default https://<primary repository host>)")
+	fs.StringVar(&g.giteaURL, "gitea-url", "", "base URL of a Gitea or Forgejo, e.g. https://gitea.example.org (env AEMAN_GITEA_URL; default https://<primary repository host>)")
 	return g
 }
 
@@ -170,11 +171,20 @@ func (g *gitFlags) forgeTarget() (forge.Forge, string, error) {
 	if len(repos) > 0 {
 		primary = repos[0].URL
 	}
-	f, err := forge.Detect(primary, forge.Kind(g.pick(g.forge, "AEMAN_FORGE", "")), g.pick(g.gitlabURL, "AEMAN_GITLAB_URL", ""))
+	f, err := g.detect(primary)
 	if err != nil {
 		return nil, "", fmt.Errorf("--forge: %w", err)
 	}
 	return f, f.Host(), nil
+}
+
+// detect is the forge the flags and the environment name for a primary
+// repository URL ("" when there is none).
+func (g *gitFlags) detect(primary string) (forge.Forge, error) {
+	return forge.DetectBases(primary, forge.Kind(g.pick(g.forge, "AEMAN_FORGE", "")), forge.Bases{
+		GitLab: g.pick(g.gitlabURL, "AEMAN_GITLAB_URL", ""),
+		Gitea:  g.pick(g.giteaURL, "AEMAN_GITEA_URL", ""),
+	})
 }
 
 // config builds the GitConfig, or nil when no repository is configured.
@@ -202,7 +212,7 @@ func (g *gitFlags) config() (*server.GitConfig, error) {
 		}
 		cfg.Repos[i].Token = cfg.Token
 	}
-	if cfg.Forge, err = forge.Detect(repos[0].URL, forge.Kind(g.pick(g.forge, "AEMAN_FORGE", "")), g.pick(g.gitlabURL, "AEMAN_GITLAB_URL", "")); err != nil {
+	if cfg.Forge, err = g.detect(repos[0].URL); err != nil {
 		return nil, fmt.Errorf("--forge: %w", err)
 	}
 	if cfg.History, err = parseSpan(g.pick(g.history, "AEMAN_HISTORY", "2w")); err != nil {
@@ -266,9 +276,19 @@ func flagArgs(cfg *server.GitConfig) []string {
 		args = append(args, "--author-email", cfg.AuthorEmail)
 	}
 	if cfg.Forge != nil {
-		args = append(args, "--forge", string(cfg.Forge.Kind()))
-		if cfg.Forge.Kind() == forge.GitLab {
-			args = append(args, "--gitlab-url", gitlabBaseOf(cfg.Forge))
+		switch cfg.Forge.Kind() {
+		case forge.GitLab:
+			args = append(args, "--forge", string(forge.GitLab), "--gitlab-url", gitlabBaseOf(cfg.Forge))
+		case forge.Gitea:
+			// The kind is one adapter for both; the name the operator
+			// gave it is what keeps a Forgejo board saying Forgejo.
+			kind := forge.Gitea
+			if cfg.Forge.Label() == "Forgejo" {
+				kind = forge.Forgejo
+			}
+			args = append(args, "--forge", string(kind), "--gitea-url", giteaBaseOf(cfg.Forge))
+		default:
+			args = append(args, "--forge", string(cfg.Forge.Kind()))
 		}
 	}
 	return args
@@ -393,6 +413,12 @@ func hasCredential(raw string) bool {
 // that, and breaks if the endpoint ever moves.
 func gitlabBaseOf(f forge.Forge) string {
 	return strings.TrimSuffix(f.AuthorizeURL(), "/oauth/authorize")
+}
+
+// giteaBaseOf reads back the instance a Gitea forge was built for, off
+// its OAuth endpoint, the way gitlabBaseOf does.
+func giteaBaseOf(f forge.Forge) string {
+	return strings.TrimSuffix(f.AuthorizeURL(), "/login/oauth/authorize")
 }
 
 // githubApp builds the GitHub App credential when AEMAN_GITHUB_APP_ID is

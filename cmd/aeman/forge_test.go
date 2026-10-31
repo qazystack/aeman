@@ -64,7 +64,7 @@ func TestGitConfigNamesTheForge(t *testing.T) {
 	}
 	fs := flag.NewFlagSet("t", flag.ContinueOnError)
 	gf := addGitFlags(fs, func(string) string { return "" })
-	if err := fs.Parse([]string{"--repo", "https://gitlab.com/x/y.git", "--forge", "gitea"}); err != nil {
+	if err := fs.Parse([]string{"--repo", "https://gitlab.com/x/y.git", "--forge", "bitbucket"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := gf.config(); err == nil || !strings.Contains(err.Error(), "forge") {

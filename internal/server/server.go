@@ -617,10 +617,11 @@ type configResponse struct {
 	// Build identifies the served frontend bundle; a running SPA whose own
 	// build differs is looking at stale code and says so.
 	Build string `json:"build,omitempty"`
-	// Forge names the code host behind the board (github, gitlab);
+	// Forge names the code host behind the board (github, gitlab, gitea);
 	// ForgeLabel is its display name for the sign-in copy; ForgeHost the
 	// host the board's repositories live on; CLI the tool a single-user
-	// server reads the identity from (gh, glab).
+	// server reads the identity from (gh, glab; empty for Gitea, which has
+	// none).
 	Forge      string `json:"forge"`
 	ForgeLabel string `json:"forgeLabel"`
 	ForgeHost  string `json:"forgeHost,omitempty"`
@@ -628,12 +629,16 @@ type configResponse struct {
 }
 
 // forgeHost is the host the board's repositories live on — the primary's,
-// else the forge's public one.
+// else the forge's public one — or, for Gitea, which has no public one,
+// the instance the forge was built for.
 func (s *Server) forgeHost() string {
 	if s.gitCfg != nil && len(s.gitCfg.Repos) > 0 {
 		if h := forge.HostOf(s.gitCfg.Repos[0].URL); h != "" {
 			return h
 		}
+	}
+	if s.forge.Kind() == forge.Gitea {
+		return s.forge.Host()
 	}
 	if s.forge.Kind() == forge.GitLab {
 		return "gitlab.com"

@@ -26,7 +26,33 @@ const gitlab = {
   connectHint: "Sign in with GitLab on first use (OAuth, no token stored).",
 };
 
+const forgejo = {
+  kind: "gitea",
+  label: "Forgejo",
+  cli: "",
+  host: "codeberg.org",
+  signInTitle: "Sign in to aeman",
+  signInLead: "Connect your Forgejo account to open the board.",
+  signInButton: "Sign in with Forgejo",
+  noTokenHint: "No Forgejo token — run aeman login in the terminal where aeman runs.",
+  connectHint: "Sign in with Forgejo on first use (OAuth, no token stored).",
+};
+
 describe("forgeCopy", () => {
+  it("spells a Forgejo board's copy under its own name, with no CLI to name", () => {
+    expect(forgeCopy({ forge: "gitea", forgeLabel: "Forgejo", cli: "", forgeHost: "codeberg.org" })).toEqual(forgejo);
+  });
+
+  it("calls a Gitea named only by kind Gitea and never offers a tool's auth login", () => {
+    const copy = forgeCopy({ forge: "gitea", forgeHost: "git.example.org" });
+    expect(copy.kind).toBe("gitea");
+    expect(copy.label).toBe("Gitea");
+    expect(copy.cli).toBe("");
+    expect(copy.host).toBe("git.example.org");
+    expect(copy.noTokenHint).toBe("No Gitea token — run aeman login in the terminal where aeman runs.");
+    expect(copy.noTokenHint).not.toContain("auth login");
+  });
+
   it("is GitHub when there is no config yet (the sign-in gate renders before /api/config answers)", () => {
     expect(forgeCopy(undefined)).toEqual(github);
     expect(forgeCopy(null)).toEqual(github);

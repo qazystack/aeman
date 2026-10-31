@@ -45,7 +45,7 @@ func TestDetectNamesTheForgeByHostUnlessToldOtherwise(t *testing.T) {
 			t.Errorf("Detect(%q): gitlab base = %q, want %q", tc.url, gl.base, tc.base)
 		}
 	}
-	if _, err := Detect("https://gitlab.com/x/y.git", "gitea", ""); err == nil {
+	if _, err := Detect("https://gitlab.com/x/y.git", "bitbucket", ""); err == nil {
 		t.Fatal("an unknown forge kind must be refused, not guessed")
 	}
 }

@@ -1,7 +1,8 @@
 // Package forge is the code host behind a board: the identity provider the
 // server signs people in with, the authority on who may read or write a
 // repository, the directory of names and avatars, and the credential git
-// pushes with. GitHub was the first; GitLab is the second. Everything the
+// pushes with. GitHub was the first, GitLab the second, Gitea (and Forgejo,
+// which keeps its API) the third. Everything the
 // server does with a forge goes through the Forge interface, and the server
 // never assembles a forge URL of its own.
 package forge
@@ -38,6 +39,11 @@ type Kind string
 const (
 	GitHub Kind = "github"
 	GitLab Kind = "gitlab"
+	// Gitea is Gitea and Forgejo alike: Forgejo keeps the Gitea API v1.
+	Gitea Kind = "gitea"
+	// Forgejo is accepted where a kind is named (--forge forgejo) and
+	// builds the Gitea adapter under Forgejo's name; no forge reports it.
+	Forgejo Kind = "forgejo"
 )
 
 // User is the signed-in person as the forge describes them.
@@ -129,37 +135,82 @@ type Forge interface {
 	GitAuth(token string) *githttp.BasicAuth
 }
 
-// Detect names the forge for a repository: the explicit kind when given,
-// else by the URL's host — github.com is GitHub, a host that says gitlab is
-// that GitLab instance — else GitLab when a base URL for one is configured,
-// else GitHub, the forge this code base grew up on.
+// Detect names the forge for a repository the way DetectBases does, with
+// a GitLab base URL as the only self-hosted one configured.
 func Detect(repoURL string, explicit Kind, gitlabBase string) (Forge, error) {
+	return DetectBases(repoURL, explicit, Bases{GitLab: gitlabBase})
+}
+
+// Bases are the operator's base URLs for the self-hosted forges
+// (--gitlab-url, --gitea-url); empty when not given.
+type Bases struct {
+	GitLab string
+	Gitea  string
+}
+
+// DetectBases names the forge for a repository: the explicit kind when
+// given, else by the URL's host — github.com is GitHub, a host that says
+// gitlab is that GitLab instance, one that says gitea, forgejo or codeberg
+// is that Gitea (or Forgejo) — else the forge whose base URL is configured,
+// else GitHub, the forge this code base grew up on. A self-hosted forge's
+// base is its configured URL, else https://<the repository's host>.
+func DetectBases(repoURL string, explicit Kind, bases Bases) (Forge, error) {
 	host := repoHost(repoURL)
-	base := strings.TrimRight(gitlabBase, "/")
-	if base == "" && host != "" {
-		base = "https://" + host
+	baseOr := func(configured string) string {
+		if b := strings.TrimRight(configured, "/"); b != "" {
+			return b
+		}
+		if host != "" {
+			return "https://" + host
+		}
+		return ""
 	}
 	switch explicit {
 	case GitHub:
 		return NewGitHub(), nil
 	case GitLab:
+		base := baseOr(bases.GitLab)
 		if base == "" {
 			return nil, errors.New("forge: gitlab needs a base URL (the repository host or --gitlab-url)")
 		}
 		return NewGitLab(base), nil
+	case Gitea, Forgejo:
+		base := baseOr(bases.Gitea)
+		if base == "" {
+			return nil, fmt.Errorf("forge: %s needs a base URL (the repository host or --gitea-url)", explicit)
+		}
+		label := "Gitea"
+		if explicit == Forgejo || forgejoHost(host) {
+			label = "Forgejo"
+		}
+		return NewGitea(base, label), nil
 	case "":
 	default:
-		return nil, fmt.Errorf("forge: unknown kind %q (github or gitlab)", explicit)
+		return nil, fmt.Errorf("forge: unknown kind %q (github, gitlab, gitea or forgejo)", explicit)
 	}
 	switch {
 	case host == "github.com":
 		return NewGitHub(), nil
 	case strings.Contains(host, "gitlab"):
-		return NewGitLab(base), nil
-	case gitlabBase != "":
-		return NewGitLab(base), nil
+		return NewGitLab(baseOr(bases.GitLab)), nil
+	case forgejoHost(host):
+		return NewGitea(baseOr(bases.Gitea), "Forgejo"), nil
+	case strings.Contains(host, "gitea"):
+		return NewGitea(baseOr(bases.Gitea), "Gitea"), nil
+	case bases.GitLab != "" && bases.Gitea != "":
+		return nil, errors.New("forge: both a GitLab and a Gitea base URL are set; name the board's forge with --forge")
+	case bases.GitLab != "":
+		return NewGitLab(baseOr(bases.GitLab)), nil
+	case bases.Gitea != "":
+		return NewGitea(baseOr(bases.Gitea), "Gitea"), nil
 	}
 	return NewGitHub(), nil
+}
+
+// forgejoHost reports whether a host names a Forgejo: its own name, or
+// Codeberg, the public instance that runs it.
+func forgejoHost(host string) bool {
+	return strings.Contains(host, "forgejo") || strings.Contains(host, "codeberg")
 }
 
 // HostOf is the host of a repository URL — https://host/…, git@host:… —

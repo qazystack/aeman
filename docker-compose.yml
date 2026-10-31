@@ -15,16 +15,20 @@ services:
       # AEMAN_GIT_TOKEN_<NAME> variables the board needs (see .env.example);
       # one of the two forms must cover every repository.
       AEMAN_GIT_TOKEN_AEMAN_DB: ${AEMAN_GIT_TOKEN_AEMAN_DB:-}
-      # Forge: github or gitlab. Empty follows the primary repository's host.
+      # Forge: github, gitlab, gitea or forgejo. Empty follows the primary repository's host.
       AEMAN_FORGE: ${AEMAN_FORGE:-}
       # Base URL of a self-hosted GitLab; empty means the primary repository's host.
       AEMAN_GITLAB_URL: ${AEMAN_GITLAB_URL:-}
+      # Base URL of a Gitea or Forgejo; empty means the primary repository's host.
+      AEMAN_GITEA_URL: ${AEMAN_GITEA_URL:-}
       # OAuth application credentials (enable multi-user mode). Exactly ONE pair
-      # is required: the GitHub one or the GitLab one.
+      # is required: the GitHub, the GitLab or the Gitea one.
       AEMAN_GITHUB_CLIENT_ID: ${AEMAN_GITHUB_CLIENT_ID:-}
       AEMAN_GITHUB_CLIENT_SECRET: ${AEMAN_GITHUB_CLIENT_SECRET:-}
       AEMAN_GITLAB_CLIENT_ID: ${AEMAN_GITLAB_CLIENT_ID:-}
       AEMAN_GITLAB_CLIENT_SECRET: ${AEMAN_GITLAB_CLIENT_SECRET:-}
+      AEMAN_GITEA_CLIENT_ID: ${AEMAN_GITEA_CLIENT_ID:-}
+      AEMAN_GITEA_CLIENT_SECRET: ${AEMAN_GITEA_CLIENT_SECRET:-}
       # Public origin; the OAuth callback is <AEMAN_BASE_URL>/auth/callback.
       AEMAN_BASE_URL: ${AEMAN_BASE_URL:?set in .env}
       # OAuth scopes; empty means the forge's default.

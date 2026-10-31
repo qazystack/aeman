@@ -6,11 +6,11 @@ Upstream is about to rework the domain (new entities such as Initiative and Epic
 the board service or the storage: `pkg/board`, `pkg/boardservice`, `pkg/gitstore`, `pkg/apiserver`, `pkg/mcpserver`, the
 board views in `web/`. Work stays at the edges: forges, sign-in, packaging.
 
-## 1. Gitea / Forgejo forge — next
+## 1. Gitea / Forgejo forge — done
 A third adapter in `internal/forge` beside GitHub and GitLab (`docs/design/git-backend.md`, "Forge-agnostic by construction",
 already names Gitea as the next adapter). One adapter serves both Gitea and Forgejo (Forgejo keeps the Gitea API v1).
-- `internal/forge/gitea.go`: OAuth2 authorize/token URLs (`/login/oauth/authorize`, `/login/oauth/access_token`), scopes for
-  user and repository read/write, `User` (`GET /api/v1/user`), `Access` (`GET /api/v1/repos/{owner}/{repo}`, `permissions`),
+- `internal/forge/gitea.go`: OAuth2 authorize/token URLs (`/login/oauth/authorize`, `/login/oauth/access_token`), read scopes
+  for user and repository (the visitor's token never pushes; the server token does, as with GitLab), `User` (`GET /api/v1/user`), `Access` (`GET /api/v1/repos/{owner}/{repo}`, `permissions`),
   `Readers` / `Lookup` (collaborators and users), avatars, `RepoRef`, `GitAuth` (basic auth with the token).
 - `Detect`: kind `gitea` (and alias `forgejo`), a base URL flag/env like GitLab's (`--gitea-url`, `AEMAN_GITEA_URL`), host
   detection for hosts that contain `gitea`, `forgejo` or `codeberg`.
@@ -23,13 +23,20 @@ already names Gitea as the next adapter). One adapter serves both Gitea and Forg
 - Why it matters: Gitea and Forgejo can themselves sign people in through any OIDC provider, so this step already gives
   single sign-on to teams that run one, without changing aeman's identity model.
 
-## 2. Helm chart
-`deploy/helm/aeman/`: Deployment (one replica by default, the binary's flags from values), Service, optional Ingress, a
-PersistentVolumeClaim for `--data`, Secret references (existing secret names in values, never secret values in the chart),
-probes, non-root security context, resources. `helm lint` and `helm template` in CI (a separate workflow file under
-`.github/workflows/`, do not edit `ci.yml`). Docs: a Kubernetes section in `docs/deploy.md`.
-- Done when: `helm lint` clean, `helm template` renders with defaults and with an Ingress, the chart version and the app
-  version are separate fields.
+## 2. Helm chart — next
+Upstream has an unmerged branch `feat/helm-chart` (`charts/aeman/`, last commit 2026-07-16, from before upstream rewrote its
+history, so it has no merge base with `main`). Start from its chart files, copied onto a branch from `upstream/main` (say so in
+the PR and in the commit message), and bring them up to date with today's flags and env (`docs/api.md` configuration table,
+incl. the Gitea ones). Keep the chart at `charts/aeman/`, where upstream put it.
+- Deployment (one replica by default; the server's flags from values), Service, optional Ingress, a PersistentVolumeClaim for
+  `--data`, probes, non-root security context, resources.
+- Secrets only by reference: values name existing Secrets (git token, OAuth client). Drop a template that renders secret
+  values from values files, if the old branch has one, and its example values file.
+- Drop a template that creates the Namespace (Helm's `--create-namespace` does that).
+- `helm lint` and `helm template` in CI: a separate workflow file under `.github/workflows/`; do not edit `ci.yml`.
+- Docs: a Kubernetes section in `docs/deploy.md`.
+- Done when: `helm lint` clean, `helm template` renders with defaults and with an Ingress, chart version and app version are
+  separate fields.
 
 ## 3. Generic OIDC sign-in — waiting for a decision
 Today identity and repository rights both come from the forge. Signing in through a plain OIDC provider needs a decision on
