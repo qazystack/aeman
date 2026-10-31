@@ -648,7 +648,7 @@ func stableBinaryPath(argv0, resolved string) string {
 	if err != nil {
 		return resolved
 	}
-	ii, err := os.Stat(invoked)
+	ii, err := os.Stat(invoked) //nolint:gosec // G703: our own argv[0] off PATH, only compared with the running file
 	if err != nil || !os.SameFile(ri, ii) {
 		return resolved
 	}
