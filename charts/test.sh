@@ -36,6 +36,8 @@ has "$out" "readOnlyRootFilesystem: true" defaults
 has "$out" "runAsNonRoot: true" defaults
 has "$out" "path: /api/healthz" defaults
 has "$out" 'value: "/data/sessions.json"' defaults
+lacks "$out" "AEMAN_SERVICE_TOKENS_FILE" "defaults (no service tokens)"
+lacks "$out" "service-tokens" "defaults (no service tokens)"
 
 # GitHub with an App, a per-repository token and an Ingress.
 out=$(render -f "$chart/ci/github-oauth-values.yaml")
@@ -53,6 +55,18 @@ has "$out" "secretName: aeman-tls" github
 has "$out" "ingressClassName: nginx" github
 ! grep -qE "name: AEMAN_GIT_TOKEN$" <<<"$out" || fail "github: a static AEMAN_GIT_TOKEN beside the App"
 lacks "$out" "kind: Secret" github
+# Service tokens: the Secret is mounted read-only as a directory (not a
+# subPath, so an edited Secret reaches the pod and the server re-reads it)
+# and AEMAN_SERVICE_TOKENS_FILE names the file in it.
+has "$out" "name: AEMAN_SERVICE_TOKENS_FILE" "github (service tokens)"
+has "$out" "value: /etc/aeman/service-tokens/tokens" "github (service tokens)"
+has "$out" "mountPath: /etc/aeman/service-tokens" "github (service tokens)"
+has "$out" "secretName: aeman-service-tokens" "github (service tokens)"
+grep -qzE "mountPath: /etc/aeman/service-tokens\s+readOnly: true" <<<"$out" || fail "github (service tokens): the mount is not read-only"
+lacks "$out" "subPath" "github (service tokens)"
+out=$(render -f "$chart/ci/github-oauth-values.yaml" --set serviceTokens.key=agents)
+has "$out" "value: /etc/aeman/service-tokens/agents" "service tokens under another key"
+has "$out" "key: agents" "service tokens under another key"
 
 # Forgejo reads the Gitea variables; an existing claim is mounted, not made.
 out=$(render -f "$chart/ci/gitea-values.yaml")

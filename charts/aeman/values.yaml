@@ -75,6 +75,15 @@ githubApp:
   existingSecret: ""
   key: private-key.pem
 
+# Service tokens for agents and other clients that cannot sign in through a
+# browser (multi-user mode only). The Secret holds the tokens file under
+# `key` — one `<login> <sha256-hex>` line per token, made by
+# `aeman token new` — and is mounted read-only as a directory, so an edit
+# reaches the pod and the server re-reads it (AEMAN_SERVICE_TOKENS_FILE).
+serviceTokens:
+  existingSecret: ""
+  key: tokens
+
 session:
   # Secret holding the key that encrypts the session store (AEMAN_SESSION_KEY).
   # Without it sessions stay in memory and a restart signs everyone out.

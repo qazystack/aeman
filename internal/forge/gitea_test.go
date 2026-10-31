@@ -27,7 +27,7 @@ func fakeGitea(t *testing.T) *httptest.Server {
 		"bob-token":   {"admin": false, "push": false, "pull": true},
 	}
 	// The collaborator permission each login holds on team/board.
-	roles := map[string]string{"alice": "owner", "bob": "read", "carol": "none"}
+	roles := map[string]string{"alice": "owner", "bob": "read", "carol": "none", "dave": "admin", "erin": "write"}
 	mux := http.NewServeMux()
 	auth := func(r *http.Request) string {
 		return strings.TrimPrefix(r.Header.Get("Authorization"), "token ")
@@ -255,6 +255,37 @@ func TestGiteaReadersAreThoseWithAtLeastReadPermission(t *testing.T) {
 	}
 }
 
+// Permission is how a service token's login has its rights decided: the
+// server's credential asks the same collaborator permission Readers asks,
+// which Gitea computes from ownership, collaboration and org teams alike.
+// owner, admin and write push; read reads; none and a login the forge does
+// not know are neither. A server credential the forge refuses is an error —
+// never ErrBadToken, which would end the visitor's own session.
+func TestGiteaPermissionIsAskedWithTheServerCredential(t *testing.T) {
+	srv := fakeGitea(t)
+	g := NewGitea(srv.URL+"/git", "Gitea")
+	repo := srv.URL + "/git/team/board.git"
+	for login, want := range map[string][2]bool{
+		"alice":  {true, true},   // owner
+		"dave":   {true, true},   // admin
+		"erin":   {true, true},   // write
+		"bob":    {true, false},  // read
+		"carol":  {false, false}, // none
+		"nobody": {false, false}, // 404: not a login the forge knows
+	} {
+		read, write, err := g.Permission(context.Background(), guardedClient(srv), "server-token", repo, login)
+		if err != nil || read != want[0] || write != want[1] {
+			t.Errorf("Permission(%s) = %v %v %v; want %v %v", login, read, write, err, want[0], want[1])
+		}
+	}
+	if _, _, err := g.Permission(context.Background(), guardedClient(srv), "bob-token", repo, "alice"); err == nil || errors.Is(err, ErrBadToken) {
+		t.Errorf("a refused server credential = %v; want an error that is not ErrBadToken", err)
+	}
+	if _, _, err := g.Permission(context.Background(), guardedClient(srv), "", repo, "alice"); err == nil {
+		t.Error("without a server credential there is nobody to ask the forge as")
+	}
+}
+
 // Lookup asks the user directory: an avatar on Gitea is served by the
 // instance, there is no URL to build from the login.
 func TestGiteaLookupAsksTheUserDirectory(t *testing.T) {
@@ -281,5 +312,8 @@ func TestGiteaThrottlingIsNotNoAccess(t *testing.T) {
 	}
 	if _, err := g.Readers(context.Background(), guardedClient(srv), "tok", srv.URL+"/team/board.git", []string{"a"}); !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("Readers while throttled = %v, want ErrRateLimited", err)
+	}
+	if _, _, err := g.Permission(context.Background(), guardedClient(srv), "tok", srv.URL+"/team/board.git", "a"); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("Permission while throttled = %v, want ErrRateLimited", err)
 	}
 }

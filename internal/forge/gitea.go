@@ -229,6 +229,48 @@ func (g *gitea) Readers(ctx context.Context, client *http.Client, serverToken, r
 	return out, nil
 }
 
+// Permission asks the same collaborator permission Readers does, for one
+// login, with the server's credential: owner, admin and write push, read
+// reads; "none" and a 404 (a login the forge does not know) are neither.
+// A credential the forge refuses is an error, never ErrBadToken.
+func (g *gitea) Permission(ctx context.Context, client *http.Client, serverToken, repoURL, login string) (read, write bool, err error) {
+	if serverToken == "" {
+		return false, false, fmt.Errorf("no server credential to ask the forge with")
+	}
+	ref, err := g.RepoRef(repoURL)
+	if err != nil {
+		return false, false, err
+	}
+	resp, err := g.get(ctx, client, serverToken, "/repos/"+ref+"/collaborators/"+url.PathEscape(login)+"/permission")
+	if err != nil {
+		return false, false, err
+	}
+	switch {
+	case throttled(resp):
+		_ = resp.Body.Close()
+		return false, false, fmt.Errorf("%w: %s", ErrRateLimited, resp.Status)
+	case resp.StatusCode == http.StatusNotFound:
+		_ = resp.Body.Close()
+		return false, false, nil
+	case resp.StatusCode/100 != 2:
+		_ = resp.Body.Close()
+		return false, false, fmt.Errorf("forge answered %s for the server credential", resp.Status)
+	}
+	var body struct {
+		Permission string `json:"permission"`
+	}
+	if err := decodeJSON(resp, &body); err != nil {
+		return false, false, err
+	}
+	switch body.Permission {
+	case "owner", "admin", "write":
+		return true, true, nil
+	case "read":
+		return true, false, nil
+	}
+	return false, false, nil
+}
+
 // Lookup asks the user directory for a login.
 func (g *gitea) Lookup(ctx context.Context, client *http.Client, token, login string) (Person, error) {
 	if login == "" {

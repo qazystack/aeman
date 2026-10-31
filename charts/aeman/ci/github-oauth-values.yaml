@@ -1,5 +1,6 @@
 # GitHub, multi-user: an OAuth/App client, a GitHub App minting the server
-# credential, a second repository with its own token, an Ingress with TLS.
+# credential, a second repository with its own token, service tokens for
+# agents, an Ingress with TLS.
 repos:
   - name: board
     url: https://github.com/example/aeman-db.git
@@ -19,6 +20,8 @@ repoTokens:
     existingSecret: aeman-founders-token
 session:
   existingSecret: aeman-session
+serviceTokens:
+  existingSecret: aeman-service-tokens
 config:
   syncInterval: 30s
 ingress:
