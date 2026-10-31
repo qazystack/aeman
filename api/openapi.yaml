@@ -2221,7 +2221,9 @@ components:
           type: array
           description: >-
             Every distinct assignee on the board, in login order, with the
-            numbers beside each — the people roster the pickers offer. Who may
+            numbers beside each — the people roster the pickers offer. In the
+            OIDC mode it also lists each service-token login whose groups open
+            a domain the visitor reads, before any card names it. Who may
             READ a repository is the other list, `domains[].members`.
           items:
             $ref: '#/components/schemas/Member'

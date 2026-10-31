@@ -235,6 +235,7 @@ func (a surface) GetBoard(ctx context.Context, _ apiv1.GetBoardRequestObject) (a
 		return nil, err
 	}
 	info := apiserver.BoardResourceWithPeople(b, a.s.store.member)
+	info.Metadata.Members = withTokenMembers(b, info.Metadata.Members, a.s.tokenMembers(rightsFrom(ctx)), a.s.store.member)
 	// Always, one repository or many: the payload's stamps are domain
 	// NAMES — the store stamps the primary's entries too (G59) — so a
 	// board that listed none left the client comparing "aeman" against "",

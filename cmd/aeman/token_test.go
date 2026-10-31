@@ -56,7 +56,18 @@ func TestTokenNewPrintsATokenAndTheLineForTheFile(t *testing.T) {
 		t.Fatalf("line = %q; want the groups", line)
 	}
 
+	// G83 — a display name is percent-encoded onto the line, so a name
+	// with spaces stays one field.
+	out.Reset()
+	if err := runToken([]string{"new", "--login", "agent-bot", "--groups", "devs", "--name", "Review Agent"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if _, line := parse(out.String()); !strings.HasSuffix(line, " groups=devs name=Review%20Agent") {
+		t.Fatalf("line = %q; want the groups and the encoded name", line)
+	}
+
 	for name, args := range map[string][]string{
+		"blank name":       {"new", "--login", "bot", "--name", "  "},
 		"no login":         {"new"},
 		"login with space": {"new", "--login", "agent bot"},
 		"comment login":    {"new", "--login", "#bot"},

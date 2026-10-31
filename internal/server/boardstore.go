@@ -136,6 +136,8 @@ type boardEntry struct {
 	// member is the store's forge hook — avatar and name for a login — for
 	// the roster frames this entry broadcasts.
 	member func(login string) apiserver.Member
+	// extra is the store's hook for members no card names (G83).
+	extra func(rights *domainRights) []string
 	// loadMu serializes full backend loads so concurrent cache misses (e.g. a
 	// burst of parallel mutations right after an invalidation) share one upstream
 	// fetch instead of stampeding GitHub.
@@ -751,6 +753,10 @@ type boardStore struct {
 	// put on the board resource's members so clients assemble no forge URL
 	// themselves. Nil leaves them bare (tests, no forge).
 	member func(login string) apiserver.Member
+	// extra is the logins listed as members beyond the cards' assignees for
+	// a visitor with these rights — the service-token lines of the OIDC
+	// mode (G83). Nil lists none.
+	extra func(rights *domainRights) []string
 }
 
 // logger returns the store's logger, or a discard logger when none was wired
@@ -780,6 +786,7 @@ func (s *boardStore) entry(key string) *boardEntry {
 			watchers: map[*subscription]struct{}{},
 			presence: map[string]presenceEntry{},
 			member:   s.member,
+			extra:    s.extra,
 		}
 		s.entries[key] = e
 	}
@@ -1250,8 +1257,12 @@ func (e *boardEntry) flushLoad() {
 	// the lock froze every read, write and watch of the board for as long as
 	// the lookups took (finding: repo-controlled logins stall the board).
 	for _, g := range groups {
+		members := apiserver.MembersOf(g.board, member)
+		if e.extra != nil {
+			members = withTokenMembers(g.board, members, e.extra(g.rights), member)
+		}
 		raw, err := json.Marshal(watchFrame{Type: "MODIFIED", Kind: "Load",
-			Object: loadFrame{Members: apiserver.MembersOf(g.board, member)}})
+			Object: loadFrame{Members: members}})
 		if err != nil {
 			continue
 		}
@@ -1265,8 +1276,9 @@ func (e *boardEntry) flushLoad() {
 // watcherGroup is the subscribers that see one board, grouped so a frame is
 // built once per distinct set of rights and sent to each.
 type watcherGroup struct {
-	board board.Board
-	subs  []*subscription
+	board  board.Board
+	rights *domainRights
+	subs   []*subscription
 }
 
 // claimFanout consumes the due flag and snapshots the watchers by their rights
@@ -1285,7 +1297,7 @@ func (e *boardEntry) claimFanout(due *bool) ([]*watcherGroup, func(login string)
 		key := rightsKey(sub.rights)
 		g, ok := byKey[key]
 		if !ok {
-			g = &watcherGroup{board: detached(sub.view(e.board))}
+			g = &watcherGroup{board: detached(sub.view(e.board)), rights: sub.rights}
 			byKey[key] = g
 			order = append(order, g)
 		}
