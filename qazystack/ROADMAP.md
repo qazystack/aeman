@@ -47,6 +47,48 @@ incl. the Gitea ones). Keep the chart at `charts/aeman/`, where upstream put it.
 - Fix any new lint findings the newer linter reports, in the same PR only if they are few and mechanical; otherwise list them.
 - Done when: all `ci.yml` jobs are green on the PR. This is meant for upstream as is.
 
-## 4. Generic OIDC sign-in — waiting for a decision
-Today identity and repository rights both come from the forge. Signing in through a plain OIDC provider needs a decision on
-where rights come from (OIDC groups → domains, or still the forge). Discussed with upstream first; do not implement.
+## 4. Generic OIDC sign-in — next
+Sign people in through any OpenID Connect provider (Authentik, Keycloak, Zitadel, Dex, …) and decide their rights from the
+provider's groups. The git remote stays a forge (any of the three) reached only with the server's credential. Decision taken
+by the fork's architect so the work can go ahead; it is offered upstream as a draft and may be reshaped there.
+
+Where it plugs in: `internal/server/access.go` already has the `domainAccess` interface (`rights`, `readers`). OIDC is a new
+implementation of it plus a sign-in flow; the domain, the board service, the storage and the board views stay untouched.
+
+### Configuration (flags and env, mirrored in `docs/api.md`)
+- `--oidc-issuer` / `AEMAN_OIDC_ISSUER` turns the mode on. `AEMAN_OIDC_CLIENT_ID` / `AEMAN_OIDC_CLIENT_SECRET`. It is
+  refused together with any forge OAuth pair (one sign-in per server), and it needs `AEMAN_BASE_URL` and a server git token.
+- `AEMAN_OIDC_SCOPES` (default `openid profile email groups`), `AEMAN_OIDC_LOGIN_CLAIM` (default `preferred_username`),
+  `AEMAN_OIDC_GROUPS_CLAIM` (default `groups`).
+- `--oidc-access <domain>=<group>:<read|write>` (repeatable; env `AEMAN_OIDC_ACCESS`, comma-separated). `write` implies
+  `read`; several rules for one domain add up; `*` as the domain means every configured domain. **Deny by default:** a domain
+  with no rule matching the visitor is invisible to them, and a visitor with no readable domain is refused after sign-in.
+
+### Sign-in
+- Discovery from `<issuer>/.well-known/openid-configuration`; the `issuer` in the document must equal the configured one;
+  https only (plain http allowed for loopback, for tests).
+- Authorization-code flow with PKCE (S256), `state` and `nonce`, reusing the existing state cookie and callback handling.
+- Verify the ID token (signature from the provider's JWKS, `iss`, `aud`, `exp`, `nonce`). Use a maintained library
+  (`github.com/coreos/go-oidc/v3` + `golang.org/x/oauth2`) rather than hand-rolled JWT code; say in the PR why it is worth the
+  dependency. Login, name, email and picture come from the ID token or the userinfo endpoint; groups from the configured
+  claim (ID token first, else userinfo).
+- The MCP OAuth path (dynamic client registration, `pendingAuth`) must sign in through OIDC the same way as the browser.
+
+### Rights and people
+- `rights(token, login)`: groups → `domainRights` by the rules above, cached for `accessTTL` like the forge answer. When the
+  cache expires the groups are asked again (userinfo with the session's access token, refreshed with the refresh token when
+  needed); a 401 there ends the session. So removing someone from a group takes effect within `accessTTL`.
+- `readers(domain, logins)`: answered from a directory of people who have signed in (login, name, avatar, groups, last
+  sign-in), kept in the session file next to the sessions and rewritten the same way. Someone who never signed in is not in
+  the directory, so cannot be assigned yet; say so in the docs. The directory never holds tokens.
+- `/api/config` tells the web app the provider's display name (`AEMAN_OIDC_NAME`, default "SSO") for the sign-in button.
+
+### Tests (first) and docs
+- An `httptest` OIDC provider (discovery, JWKS, token, userinfo) in the style of `gitea_oauth_test.go`: a full browser
+  sign-in; a bad `iss`/`aud`/`nonce`/signature refused; deny by default; read vs write rules; `*`; a group removed at the
+  provider loses the domain after `accessTTL`; a revoked session (userinfo 401) ends; `readers` from the directory;
+  refusal of OIDC together with a forge OAuth pair; the MCP sign-in path.
+- New rows in `docs/design/behavior-matrix.md`; `docs/deploy.md` "Sign in with an OIDC provider" (provider setup, a groups
+  claim example, the access rules); `docs/api.md` configuration table; `docs/design/git-backend.md` where it says identity
+  comes from the forge.
+- Done when: CI green, the sign-in test passes end to end, and nothing under `pkg/` changed.
