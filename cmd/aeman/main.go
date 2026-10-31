@@ -88,6 +88,8 @@ func run(args []string) error {
 		return runLogin(args[1:])
 	case "logout":
 		return runLogout(args[1:])
+	case "token":
+		return runToken(args[1:], os.Stdout)
 	case "version", "--version", "-v":
 		fmt.Println("aeman", version)
 		return nil
@@ -110,6 +112,7 @@ Usage:
   aeman migrate [flags] Copy a GitHub Projects v2 board into a repository
   aeman login [flags]   Store the forge token in the OS keychain
   aeman logout [flags]  Remove the stored token for the forge
+  aeman token new       Make a service token for an agent or bot (--login, --groups)
   aeman version         Print the version
   aeman help            Show this help
 
@@ -182,14 +185,17 @@ func runServe(args []string) error {
 		}
 	}
 
+	// Service tokens (a file mounted from a Secret) let agents and bots
+	// act as a login of their own on a multi-user server.
 	srv, err := server.New(server.Options{
-		Addr:    *addr,
-		Version: version,
-		Logger:  logger,
-		Auth:    auth,
-		Git:     gitCfg,
-		Forge:   gitCfg.Forge,
-		CLI:     cli,
+		Addr:              *addr,
+		Version:           version,
+		Logger:            logger,
+		Auth:              auth,
+		Git:               gitCfg,
+		Forge:             gitCfg.Forge,
+		CLI:               cli,
+		ServiceTokensFile: os.Getenv("AEMAN_SERVICE_TOKENS_FILE"),
 	})
 	if err != nil {
 		return err
