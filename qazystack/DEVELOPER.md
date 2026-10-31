@@ -15,5 +15,6 @@ You are the developer of this fork. The architect reviews and merges; you never 
    first, then English details, the tests you ran and their result.
 6. The repository is public: no hostnames, IPs, tokens, company names or paths of any deployment.
 7. Never weaken or delete tests to make them pass; never add secrets.
-8. GitHub Actions do not run on this fork. Run every check CI runs (`.github/workflows/ci.yml`) yourself and list the
+8. CI runs on PRs here, but still run every check CI runs (`.github/workflows/ci.yml`) yourself before pushing and list the
    commands and results in the PR.
+9. Never push tags to this fork: a `v*` tag runs `image.yml`, which publishes a container image under this fork's name.
