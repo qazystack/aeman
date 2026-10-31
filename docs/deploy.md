@@ -1,6 +1,6 @@
 # Deploying aeman (self-hosted, multi-user)
 
-Runs aeman behind Caddy, which terminates TLS with an automatic Let's Encrypt certificate. Each visitor signs in with the forge the board repositories live on — GitHub or GitLab (gitlab.com or self-hosted) — and acts with **their own** token; the server fetches and pushes with its own (`AEMAN_GIT_TOKEN`).
+Runs aeman behind Caddy, which terminates TLS with an automatic Let's Encrypt certificate. Each visitor signs in with the forge the board repositories live on — GitHub, GitLab (gitlab.com or self-hosted) or Gitea / Forgejo — and acts with **their own** token; the server fetches and pushes with its own (`AEMAN_GIT_TOKEN`).
 
 ```
 browser ──HTTPS──► Caddy (:443, auto-TLS) ──http──► aeman:8765
@@ -8,7 +8,7 @@ browser ──HTTPS──► Caddy (:443, auto-TLS) ──http──► aeman:87
 
 ## 1. Register an OAuth application
 
-One forge per instance: register the application at GitHub **or** GitLab and fill in that pair of variables only. On both, the callback is `<AEMAN_BASE_URL>/auth/callback`.
+One forge per instance: register the application at GitHub, GitLab **or** Gitea / Forgejo and fill in that pair of variables only. On all of them, the callback is `<AEMAN_BASE_URL>/auth/callback`.
 
 ### GitHub — a GitHub App (recommended)
 
@@ -49,6 +49,16 @@ GitLab → User Settings (or a group's **Settings**, or the **Admin area**) → 
 
 Save it. Keep the **Application ID** and **Secret** — they become `AEMAN_GITLAB_CLIENT_ID` / `AEMAN_GITLAB_CLIENT_SECRET`. On a self-hosted GitLab also set `AEMAN_GITLAB_URL` to its base URL (`https://gitlab.example.com`); on gitlab.com nothing more is needed.
 
+### Gitea / Forgejo
+
+One adapter serves both: Forgejo keeps the Gitea API v1. Gitea or Forgejo → **Settings** → **Applications** → **Manage OAuth2 Applications** (for an instance-wide application: **Site Administration** → **Integrations** → **Applications**):
+
+- **Application name:** `aeman`
+- **Redirect URIs:** `https://aeman.example.com/auth/callback`
+- **Confidential client:** yes
+
+Save it. Keep the **Client ID** and **Client Secret** — they become `AEMAN_GITEA_CLIENT_ID` / `AEMAN_GITEA_CLIENT_SECRET`. Set `AEMAN_GITEA_URL` to the instance's base URL (`https://gitea.example.com`, including the subpath if it is served under one) unless the repository's host already contains `gitea`, `forgejo` or `codeberg`; `AEMAN_FORGE=forgejo` (instead of `gitea`) only changes the name the sign-in page shows. The sign-in asks for `read:user read:repository` — the visitor's token never pushes; an instance older than scoped OAuth tokens ignores the parameter. `AEMAN_GIT_TOKEN` is an access token of an account that can write the board repositories (Settings → Applications → **Generate New Token**, with repository read and write and user read). Gitea and Forgejo can themselves sign people in through an external OIDC provider, so a team that runs one gets single sign-on to the board through it.
+
 ## 2. DNS and firewall
 
 - Add a DNS **A record**: `aeman.example.com` → your server IP (DNS-only / not proxied, so Caddy can solve the ACME challenge).
@@ -62,7 +72,8 @@ cd aeman
 cp .env.example .env
 # fill AEMAN_REPOS, AEMAN_GIT_TOKEN, AEMAN_BASE_URL, AEMAN_DOMAIN and ONE pair:
 #   AEMAN_GITHUB_CLIENT_ID / _SECRET, or
-#   AEMAN_GITLAB_CLIENT_ID / _SECRET (+ AEMAN_GITLAB_URL for a self-hosted GitLab)
+#   AEMAN_GITLAB_CLIENT_ID / _SECRET (+ AEMAN_GITLAB_URL for a self-hosted GitLab), or
+#   AEMAN_GITEA_CLIENT_ID / _SECRET (+ AEMAN_GITEA_URL)
 docker compose up -d --build
 ```
 
@@ -72,11 +83,11 @@ The compose file builds from this checkout. To run a **published** image instead
 
 `AEMAN_GIT_TOKEN` is the server's own credential for all of them. A board whose repositories live in **two organisations** gives each its own instead: `AEMAN_GIT_TOKEN_<NAME>`, named after the domain (upper-cased, anything but a letter or a digit an underscore — `founders` → `AEMAN_GIT_TOKEN_FOUNDERS`). This is what lets each token stay narrow: a fine-grained GitHub token belongs to one organisation, so one token cannot cover repositories in two, and a classic token that could is wider than either repository needs. Pass the variables you use through the compose file's `environment` block.
 
-Caddy issues the certificate on first start (needs DNS + ports 80/443 already in place). Open `https://aeman.example.com`, click **Sign in with GitHub** (or **GitLab**), and you're in.
+Caddy issues the certificate on first start (needs DNS + ports 80/443 already in place). Open `https://aeman.example.com`, click **Sign in with GitHub** (or **GitLab**, **Gitea**, **Forgejo**), and you're in.
 
 ## Choosing the forge (optional)
 
-`AEMAN_FORGE=github|gitlab` names the forge explicitly. Unset, it follows the primary repository's host: `github.com` → GitHub, a host containing `gitlab` → GitLab, anything else → GitHub unless `AEMAN_GITLAB_URL` is set. A self-hosted GitLab on a host without `gitlab` in its name therefore needs `AEMAN_GITLAB_URL` (or `AEMAN_FORGE=gitlab`, in which case the URL defaults to `https://<host of the primary repository>`).
+`AEMAN_FORGE=github|gitlab|gitea|forgejo` names the forge explicitly. Unset, it follows the primary repository's host: `github.com` → GitHub, a host containing `gitlab` → GitLab, a host containing `gitea` → Gitea, one containing `forgejo` or `codeberg` → Forgejo, anything else → GitHub unless `AEMAN_GITLAB_URL` or `AEMAN_GITEA_URL` is set (both set with no `AEMAN_FORGE` is refused). A self-hosted GitLab on a host without `gitlab` in its name therefore needs `AEMAN_GITLAB_URL` (or `AEMAN_FORGE=gitlab`, in which case the URL defaults to `https://<host of the primary repository>`); a Gitea or Forgejo likewise needs `AEMAN_GITEA_URL` or `AEMAN_FORGE=gitea`/`forgejo`.
 
 ## Lock to one board (optional)
 
@@ -92,9 +103,9 @@ A user whose token can't read that board sees an access-denied screen rather tha
 
 ## Notes
 
-- **Who sees what.** A visitor's own token decides per repository. GitHub: the repository's `permissions` — `pull` reads, `push`/`maintain`/`admin` write. GitLab: the project's access level — Reporter (20) reads, Developer (30) and above write; a Guest sees the project but not its board; public and internal projects read for anyone signed in. The assignee pickers list the people who can read the repository: on GitHub each login's collaborator permission, asked with the server token; on GitLab the project's member list (inherited group members included), which also supplies display names and avatars.
+- **Who sees what.** A visitor's own token decides per repository. GitHub: the repository's `permissions` — `pull` reads, `push`/`maintain`/`admin` write. GitLab: the project's access level — Reporter (20) reads, Developer (30) and above write; a Guest sees the project but not its board; public and internal projects read for anyone signed in. Gitea / Forgejo: the repository's `permissions` — `pull` reads, `push`/`admin` write; a public repository reads for anyone. The assignee pickers list the people who can read the repository: on GitHub each login's collaborator permission, asked with the server token; on GitLab the project's member list (inherited group members included), which also supplies display names and avatars; on Gitea / Forgejo each login's collaborator permission (ownership and organisation teams included), whose answer supplies them too.
 - **Sessions & the session store.** `AEMAN_SESSION_FILE` (on the `aeman_sessions` volume) always persists the dynamic MCP client registry. Sessions — the visitors' forge tokens — are written there only when `AEMAN_SESSION_KEY` is set, encrypted with it (AES-256-GCM); then restarts and redeploys keep users signed in and MCP tokens live. Without the key, sessions stay in memory and a restart signs everyone out — no plaintext token ever touches disk either way. Keep the key stable (changing or losing it just signs everyone out) and store it outside the session volume so a leak of that volume alone exposes nothing. GitHub's classic OAuth App tokens don't expire, so a session simply lasts up to 14 days.
-- **Scopes:** `AEMAN_SCOPES` overrides what the sign-in asks for; the default is `repo` on GitHub (a GitHub App ignores the parameter — its permissions come from the installation) and `read_user read_api` on GitLab.
+- **Scopes:** `AEMAN_SCOPES` overrides what the sign-in asks for; the default is `repo` on GitHub (a GitHub App ignores the parameter — its permissions come from the installation) `read_user read_api` on GitLab and `read:user read:repository` on Gitea / Forgejo.
 - **Cert storage:** the `caddy_data` volume persists issued certificates across restarts.
-- **Local single-user mode:** without a client id/secret pair the binary runs as a single-user local tool on the identity of whoever its token belongs to — the forge's token variables, then the OS keychain that `aeman login` writes, then the forge CLI signed in on the machine (`gh` on GitHub, `glab` on GitLab). See [api.md](api.md#aeman-login).
+- **Local single-user mode:** without a client id/secret pair the binary runs as a single-user local tool on the identity of whoever its token belongs to — the forge's token variables, then the OS keychain that `aeman login` writes, then the forge CLI signed in on the machine (`gh` on GitHub, `glab` on GitLab; Gitea / Forgejo have no such tool, so there it is `GITEA_TOKEN`/`FORGEJO_TOKEN` or `aeman login`). See [api.md](api.md#aeman-login).
 - **Behind Cloudflare Tunnel instead of Caddy?** Drop the `caddy` service, add a `cloudflared` service with your tunnel token, and route the public hostname to `http://aeman:8765`; keep `AEMAN_BASE_URL` pointed at the public HTTPS URL.

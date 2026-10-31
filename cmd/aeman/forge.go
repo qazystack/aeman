@@ -28,12 +28,29 @@ const forgeTimeout = 30 * time.Second
 // variable because it is the one source a test cannot supply: it execs
 // whatever gh or glab the machine has, so the order of the chain cannot
 // be asserted end to end without standing in for it.
-var forgeToolCLI = func(f forge.Forge) forge.CLI {
-	if f != nil && f.Kind() == forge.GitLab {
+var forgeToolCLI = toolFor
+
+// toolFor is the forge's own command-line tool: gh, glab — and for Gitea
+// none, since no Gitea tool hands out its token; that source answers
+// nothing and the chain ends at the keychain.
+func toolFor(f forge.Forge) forge.CLI {
+	switch {
+	case f != nil && f.Kind() == forge.GitLab:
 		return glabcli.New(f.Host())
+	case f != nil && f.Kind() == forge.Gitea:
+		return noTool{label: f.Label()}
 	}
 	return ghcli.NewTokenSource()
 }
+
+// noTool is the tool source of a forge that has none.
+type noTool struct{ label string }
+
+func (n noTool) Token(context.Context) (string, error) {
+	return "", fmt.Errorf("%s has no command-line tool aeman reads a token from", n.label)
+}
+
+func (n noTool) Login(ctx context.Context) (string, error) { return n.Token(ctx) }
 
 // cliFor is where a single-user run reads its credential and identity: the
 // forge's token variables, the OS keychain that `aeman login` writes, then
@@ -393,8 +410,11 @@ func (c *chain) Login(ctx context.Context) (string, error) {
 // tokenEnv is the environment variables a forge's token is taken from, in
 // order, before the CLI is asked.
 func tokenEnv(f forge.Forge) []string {
-	if f != nil && f.Kind() == forge.GitLab {
+	switch {
+	case f != nil && f.Kind() == forge.GitLab:
 		return []string{"GITLAB_TOKEN"}
+	case f != nil && f.Kind() == forge.Gitea:
+		return []string{"GITEA_TOKEN", "FORGEJO_TOKEN"}
 	}
 	return []string{"GITHUB_TOKEN", "GH_TOKEN"}
 }
@@ -425,6 +445,9 @@ func resolveForgeToken(ctx context.Context, f forge.Forge, cli forge.CLI) (strin
 // A second wording would mean the same dead end reads differently
 // depending on which layer noticed it first.
 func noTokenError(f forge.Forge) error {
+	if cliNameOf(f) == "" {
+		return fmt.Errorf("no %s token; set %s or run `aeman login`", labelOf(f), tokenEnv(f)[0])
+	}
 	return fmt.Errorf("no %s token; set %s, run `aeman login`, or run `%s auth login`", labelOf(f), tokenEnv(f)[0], cliNameOf(f))
 }
 
@@ -435,9 +458,13 @@ func labelOf(f forge.Forge) string {
 	return f.Label()
 }
 
+// cliNameOf is the forge's token tool, "" for a forge with none (Gitea).
 func cliNameOf(f forge.Forge) string {
-	if f != nil && f.Kind() == forge.GitLab {
+	switch {
+	case f != nil && f.Kind() == forge.GitLab:
 		return "glab"
+	case f != nil && f.Kind() == forge.Gitea:
+		return ""
 	}
 	return "gh"
 }
@@ -447,23 +474,37 @@ func cliNameOf(f forge.Forge) string {
 // must be the forge the board lives on — a GitHub sign-in cannot vouch for
 // a GitLab repository.
 func oauthPair(f forge.Forge, env func(string) string) (id, secret string, err error) {
-	gh := env("AEMAN_GITHUB_CLIENT_ID") != "" && env("AEMAN_GITHUB_CLIENT_SECRET") != ""
-	gl := env("AEMAN_GITLAB_CLIENT_ID") != "" && env("AEMAN_GITLAB_CLIENT_SECRET") != ""
-	switch {
-	case gh && gl:
-		return "", "", fmt.Errorf("both AEMAN_GITHUB_CLIENT_* and AEMAN_GITLAB_CLIENT_* are set; a board signs in with one forge")
-	case gh:
-		if f.Kind() != forge.GitHub {
-			return "", "", fmt.Errorf("AEMAN_GITHUB_CLIENT_* is set but the board's forge is %s (set --forge github, or the GitLab pair)", f.Kind())
-		}
-		return env("AEMAN_GITHUB_CLIENT_ID"), env("AEMAN_GITHUB_CLIENT_SECRET"), nil
-	case gl:
-		if f.Kind() != forge.GitLab {
-			return "", "", fmt.Errorf("AEMAN_GITLAB_CLIENT_* is set but the board's forge is %s (set --forge gitlab or --gitlab-url)", f.Kind())
-		}
-		return env("AEMAN_GITLAB_CLIENT_ID"), env("AEMAN_GITLAB_CLIENT_SECRET"), nil
+	pairs := []struct {
+		kind   forge.Kind
+		prefix string
+		hint   string
+	}{
+		{forge.GitHub, "AEMAN_GITHUB_CLIENT_", "--forge github"},
+		{forge.GitLab, "AEMAN_GITLAB_CLIENT_", "--forge gitlab or --gitlab-url"},
+		{forge.Gitea, "AEMAN_GITEA_CLIENT_", "--forge gitea or --gitea-url"},
 	}
-	return "", "", nil
+	var set []int
+	for i, p := range pairs {
+		if env(p.prefix+"ID") != "" && env(p.prefix+"SECRET") != "" {
+			set = append(set, i)
+		}
+	}
+	switch len(set) {
+	case 0:
+		return "", "", nil
+	case 1:
+	default:
+		var names []string
+		for _, i := range set {
+			names = append(names, pairs[i].prefix+"*")
+		}
+		return "", "", fmt.Errorf("%s are all set; a board signs in with one forge", strings.Join(names, " and "))
+	}
+	p := pairs[set[0]]
+	if f.Kind() != p.kind {
+		return "", "", fmt.Errorf("%s* is set but the board's forge is %s (set %s, or the pair of the board's forge)", p.prefix, f.Kind(), p.hint)
+	}
+	return env(p.prefix + "ID"), env(p.prefix + "SECRET"), nil
 }
 
 // missingTokens names the board's repositories that have no credential —

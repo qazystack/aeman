@@ -31,10 +31,10 @@ export interface AppConfig {
   build?: string;
   /** The forge the board lives on and signs in with. An older server sends
    *  none of these four: that is GitHub (see forge.ts). */
-  forge?: "github" | "gitlab";
-  /** Human name of the forge: "GitHub" | "GitLab". */
+  forge?: "github" | "gitlab" | "gitea";
+  /** Human name of the forge: "GitHub" | "GitLab" | "Gitea" | "Forgejo". */
   forgeLabel?: string;
-  /** The forge's own CLI, "gh" | "glab" — one of the sources a local run reads its token from, after the environment and the OS keychain. */
+  /** The forge's own CLI, "gh" | "glab" ("" for Gitea, which has none) — one of the sources a local run reads its token from, after the environment and the OS keychain. */
   cli?: string;
   /** The forge's host: "github.com", "gitlab.com", or a self-hosted one. */
   forgeHost?: string;

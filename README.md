@@ -65,8 +65,8 @@ Ids are ULIDs; files keep unknown keys, so hand edits and other tools survive. `
 
 ## Requirements
 
-- A git repository aeman can push to over HTTPS, on GitHub or GitLab (gitlab.com or self-hosted) — `AEMAN_GIT_TOKEN`, or `aeman login` to keep the token in the OS keychain instead — or a local path for a single-user setup.
-- Optionally the forge's CLI, signed in, as another place the local identity and token can come from — depending on where the board repositories live: [GitHub CLI (`gh`)](https://cli.github.com/) (`gh auth login`) or [GitLab CLI (`glab`)](https://gitlab.com/gitlab-org/cli) (`glab auth login`). `aeman login` covers the same ground without either.
+- A git repository aeman can push to over HTTPS, on GitHub, GitLab (gitlab.com or self-hosted) or Gitea / Forgejo — `AEMAN_GIT_TOKEN`, or `aeman login` to keep the token in the OS keychain instead — or a local path for a single-user setup.
+- Optionally the forge's CLI, signed in, as another place the local identity and token can come from — depending on where the board repositories live: [GitHub CLI (`gh`)](https://cli.github.com/) (`gh auth login`) or [GitLab CLI (`glab`)](https://gitlab.com/gitlab-org/cli) (`glab auth login`). `aeman login` covers the same ground without either, and is the way on Gitea / Forgejo, which have no such tool.
 - Go 1.27.1+ and Node.js 20+ to build from source.
 
 ## Build & run
@@ -86,7 +86,7 @@ make run            # go run ./cmd/aeman serve
 
 `aeman serve` flags: `--repo name=url` (repeatable; the board's repositories, primary first — env `AEMAN_REPOS`), `--data` (where the clones live), `--history` (how far back the log is loaded in the background, default 2 weeks) and `--history-max` (how far a card's log may deepen on demand, default a year), `--sync-interval` (fetch cadence, 15 s), `--unpushed-warn` (age of an unpushed commit that turns `/api/healthz` degraded, 5 m), `--committer` and `--author-email`, `--addr`, `--open`, `--verbose`. Each flag has an `AEMAN_*` environment twin; the push credential is `AEMAN_GIT_TOKEN`, never a flag. ("Project" is aeman's own planning entity — a group of epic columns — not a repository.)
 
-The board lives on one **forge** — GitHub or GitLab (gitlab.com or self-hosted) — which signs visitors in and answers who may read which repository. `--forge github|gitlab` (`AEMAN_FORGE`) picks it; unset, it follows the primary repository's host: `github.com` → GitHub, a host containing `gitlab` → GitLab, anything else → GitHub unless `AEMAN_GITLAB_URL` is set. `--gitlab-url` (`AEMAN_GITLAB_URL`) names a self-hosted GitLab's base URL (default `https://<host of the primary repository>`). Without OAuth variables the binary runs in the local, single-user mode. The push credential is `AEMAN_GIT_TOKEN` when set, else `GITHUB_TOKEN`/`GH_TOKEN` (GitHub) or `GITLAB_TOKEN` (GitLab), else the OS keychain that `aeman login` writes, else the forge's CLI signed in on the machine (`gh auth login`, `glab auth login`). The identity is whoever that credential belongs to — the same order, so the push and the name on the commits are one account. `AEMAN_GIT_TOKEN` is the exception: it names the server's credential only, and the identity then starts at the forge's own variables.
+The board lives on one **forge** — GitHub or GitLab (gitlab.com or self-hosted) — which signs visitors in and answers who may read which repository. `--forge github|gitlab|gitea|forgejo` (`AEMAN_FORGE`) picks it; unset, it follows the primary repository's host: `github.com` → GitHub, a host containing `gitlab` → GitLab, one containing `gitea`, `forgejo` or `codeberg` → Gitea / Forgejo, anything else → GitHub unless `AEMAN_GITLAB_URL` or `AEMAN_GITEA_URL` is set. `--gitlab-url` (`AEMAN_GITLAB_URL`) names a self-hosted GitLab's base URL and `--gitea-url` (`AEMAN_GITEA_URL`) a Gitea's or Forgejo's (default `https://<host of the primary repository>`). Without OAuth variables the binary runs in the local, single-user mode. The push credential is `AEMAN_GIT_TOKEN` when set, else `GITHUB_TOKEN`/`GH_TOKEN` (GitHub), `GITLAB_TOKEN` (GitLab) or `GITEA_TOKEN`/`FORGEJO_TOKEN` (Gitea), else the OS keychain that `aeman login` writes, else the forge's CLI signed in on the machine (`gh auth login`, `glab auth login`). The identity is whoever that credential belongs to — the same order, so the push and the name on the commits are one account. `AEMAN_GIT_TOKEN` is the exception: it names the server's credential only, and the identity then starts at the forge's own variables.
 
 ## API and MCP server
 
@@ -100,13 +100,14 @@ A data directory takes one process, so when several MCP clients share a board, r
 
 ## Self-hosted deploy (multi-user)
 
-For a shared instance where every visitor signs in with GitHub or GitLab — their token decides which of the board's repositories they may read and write — set the OAuth environment variables of **one** forge and the binary switches from the local CLI mode to an OAuth web flow with per-user sessions:
+For a shared instance where every visitor signs in with GitHub, GitLab or Gitea / Forgejo — their token decides which of the board's repositories they may read and write — set the OAuth environment variables of **one** forge and the binary switches from the local CLI mode to an OAuth web flow with per-user sessions:
 
 - `AEMAN_GITHUB_CLIENT_ID` / `AEMAN_GITHUB_CLIENT_SECRET` — from a GitHub OAuth App; **or**
-- `AEMAN_GITLAB_CLIENT_ID` / `AEMAN_GITLAB_CLIENT_SECRET` — from a GitLab application (`AEMAN_GITLAB_URL` for a self-hosted GitLab). Exactly one pair.
+- `AEMAN_GITLAB_CLIENT_ID` / `AEMAN_GITLAB_CLIENT_SECRET` — from a GitLab application (`AEMAN_GITLAB_URL` for a self-hosted GitLab); **or**
+- `AEMAN_GITEA_CLIENT_ID` / `AEMAN_GITEA_CLIENT_SECRET` — from a Gitea or Forgejo OAuth2 application (`AEMAN_GITEA_URL` for its base URL). Exactly one pair.
 - `AEMAN_BASE_URL` — the public origin; the callback registered at the forge is `<AEMAN_BASE_URL>/auth/callback`.
 - `AEMAN_GIT_TOKEN` — the server's own credential for the board repositories; required in this mode.
-- `AEMAN_SCOPES` — OAuth scopes (default `repo` on GitHub, `read_user read_api` on GitLab; a GitHub App ignores it).
+- `AEMAN_SCOPES` — OAuth scopes (default `repo` on GitHub, `read_user read_api` on GitLab, `read:user read:repository` on Gitea; a GitHub App ignores it).
 - `AEMAN_GITHUB_APP_ID`, `AEMAN_GITHUB_APP_KEY` (PEM or its base64) / `AEMAN_GITHUB_APP_KEY_FILE` — a GitHub App as the server credential: installation tokens minted and renewed instead of a PAT ([deploy.md](docs/deploy.md)).
 
 A `docker-compose.yml` (aeman + Caddy with automatic HTTPS) and a step-by-step guide are in [docs/deploy.md](docs/deploy.md):
