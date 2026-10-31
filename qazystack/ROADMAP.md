@@ -107,3 +107,17 @@ service that works the board for an agent account has no credential to use. Add 
 - Tests first (both modes, unknown/removed token, rights, file reload, the MCP path); docs in `docs/api.md`
   ("Authentication and access") and `docs/deploy.md`; a behaviour-matrix row. Chart: an optional `serviceTokens.existingSecret`.
 - Done when: CI green and an API call with a service token creates a card authored by its login in a test.
+
+## 6. Service-token logins are board members — next
+Found when wiring the first agent: in OIDC mode `readers()` answers only from the directory of people who signed in through
+the browser, so a login that exists only as a service token (an agent) is never a board member: the assignee pickers do not
+offer it and a card cannot be given to it. In forge mode the forge decides membership, so this is OIDC mode only.
+- In OIDC mode, a service-token line is a member: its login with the line's groups counts in `readers` (same rules), and it
+  appears in `metadata.members` with a display name. Add an optional `name=<display name>` field to the token line (spaces
+  as `%20` or quote the value; keep the format strict and documented); default the name to the login.
+- A login present both as a person and as a token keeps the person's entry (name, avatar, groups); say which wins.
+- Removing the line removes the member at the next re-read (an already assigned card keeps the login as text).
+- Tests first: an agent login offered as an assignee in OIDC mode, a card created with it as assignee accepted, not offered
+  once its line is removed, the person-vs-token precedence. Docs: `docs/api.md` (Authentication and access), `docs/deploy.md`
+  (service tokens), behaviour-matrix row.
+- Branch from `origin/main` (needs both OIDC and service tokens; for upstream it follows #6). Done when CI is green.
