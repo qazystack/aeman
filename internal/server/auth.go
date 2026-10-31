@@ -51,6 +51,11 @@ type OAuthConfig struct {
 	// a leak of the file alone (backup, stray volume) exposes no token. Empty =
 	// sessions stay in memory only (signed out on restart).
 	SessionKey string
+	// OIDC, when set, signs people in through an OpenID Connect provider
+	// instead of the forge: ClientID, ClientSecret and Scopes are then the
+	// provider's client, and rights come from the provider's groups by the
+	// access rules (oidcaccess.go). The forge is only the git remote.
+	OIDC *OIDCConfig
 }
 
 type oauthSession struct {
@@ -79,6 +84,10 @@ type persistedState struct {
 	// written only when a SessionKey is configured. Legacy plaintext Sessions
 	// are read once (to scrub) but never written.
 	EncSessions string `json:"encSessions,omitempty"`
+	// People is the OIDC directory: who has signed in through the provider,
+	// with their groups. Names and groups, never a token — so it is written
+	// with or without a SessionKey.
+	People map[string]oidcPerson `json:"people,omitempty"`
 }
 
 // persistedClient is the on-disk form of an oauthClient.
@@ -147,6 +156,27 @@ type authManager struct {
 	pendingConsent map[string]pendingConsent
 	// registerLimiter rate-limits the public client-registration endpoint.
 	registerLimiter *rateLimiter
+
+	// oidc, when set, is the OpenID Connect provider people sign in with
+	// instead of the forge; directory the people who have; admit decides a
+	// sign-in from what the provider said (nil admits everyone). loginFlows
+	// holds a browser sign-in's PKCE verifier and nonce, keyed by its state.
+	oidc       *oidcIdentity
+	directory  *oidcDirectory
+	admit      func(oidcPerson) error
+	loginFlows map[string]loginFlow
+	// renewAhead is how early a session's token is renewed before it
+	// expires (tokenRenewAhead for the forge; shorter for OIDC providers,
+	// whose access tokens often live minutes).
+	renewAhead time.Duration
+}
+
+// loginFlow is what a browser sign-in through OIDC must remember between
+// the redirect and the callback.
+type loginFlow struct {
+	verifier string
+	nonce    string
+	created  time.Time
 }
 
 // oauthClient is a dynamically-registered MCP OAuth client.
@@ -161,6 +191,10 @@ type pendingAuth struct {
 	codeChallenge string
 	clientState   string
 	created       time.Time
+	// verifier and nonce are the OIDC provider leg's PKCE verifier and
+	// nonce (empty with a forge).
+	verifier string
+	nonce    string
 }
 
 // pendingAuthTTL bounds how long an abandoned authorize flow lingers before it
@@ -232,7 +266,7 @@ func newAuthManager(cfg OAuthConfig, f forge.Forge, log *slog.Logger) *authManag
 	if f == nil {
 		f = forge.NewGitHub()
 	}
-	if cfg.Scopes == "" {
+	if cfg.Scopes == "" && cfg.OIDC == nil {
 		cfg.Scopes = f.DefaultScopes()
 	}
 	a := &authManager{
@@ -253,9 +287,38 @@ func newAuthManager(cfg OAuthConfig, f forge.Forge, log *slog.Logger) *authManag
 		// 30 registrations per minute per client address: legitimate MCP clients
 		// register once, so this only ever bites a flood.
 		registerLimiter: newRateLimiter(30, time.Minute),
+		loginFlows:      map[string]loginFlow{},
+		renewAhead:      tokenRenewAhead,
+	}
+	if cfg.OIDC != nil {
+		a.oidc = newOIDCIdentity(*cfg.OIDC, cfg.ClientID, cfg.ClientSecret, cfg.Scopes, a.redirectURI(), a.client)
+		a.cfg.Scopes = strings.Join(a.oidc.scopes, " ")
+		a.directory = newOIDCDirectory()
+		a.directory.save = a.persist
+		a.renewAhead = oidcRenewAhead
 	}
 	a.load()
 	return a
+}
+
+// oidcRenewAhead is how early an OIDC session's access token is renewed: a
+// provider's access token commonly lives five minutes, so the forge's ten
+// would renew on every request.
+const oidcRenewAhead = 30 * time.Second
+
+// persist writes the session file now.
+func (a *authManager) persist() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.saveLocked()
+}
+
+// label is the identity provider's display name for the sign-in copy.
+func (a *authManager) label() string {
+	if a.oidc != nil {
+		return a.oidc.cfg.Name
+	}
+	return a.forge.Label()
 }
 
 // load restores the persisted MCP client registry, and — when a SessionKey is
@@ -280,6 +343,9 @@ func (a *authManager) load() {
 	}
 	for id, c := range in.Clients {
 		a.clients[id] = oauthClient{redirectURIs: append([]string(nil), c.RedirectURIs...)}
+	}
+	if a.directory != nil {
+		a.directory.restore(in.People)
 	}
 	if a.sessionKey != nil && in.EncSessions != "" {
 		if sessions, err := decryptSessions(a.sessionKey, in.EncSessions); err != nil {
@@ -312,6 +378,9 @@ func (a *authManager) saveLocked() {
 	out := persistedState{Clients: make(map[string]persistedClient, len(a.clients))}
 	for id, c := range a.clients {
 		out.Clients[id] = persistedClient{RedirectURIs: append([]string(nil), c.redirectURIs...)}
+	}
+	if a.directory != nil {
+		out.People = a.directory.snapshot()
 	}
 	if a.sessionKey != nil && len(a.sessions) > 0 {
 		sessions := make(map[string]persistedSession, len(a.sessions))
@@ -398,7 +467,7 @@ func (a *authManager) sessionByID(ctx context.Context, sid string) (oauthSession
 	}
 	// The GitHub token is renewed a little AHEAD of its expiry, so requests
 	// keep riding a valid token instead of queueing behind a renewal.
-	if s.tokenExpiry.IsZero() || time.Until(s.tokenExpiry) > tokenRenewAhead || s.refresh == "" {
+	if s.tokenExpiry.IsZero() || time.Until(s.tokenExpiry) > a.renewAhead || s.refresh == "" {
 		a.mu.Unlock()
 		return s, true
 	}
@@ -471,11 +540,11 @@ func (a *authManager) renewSession(ctx context.Context, sid string, s oauthSessi
 			delete(a.sessions, sid)
 			a.saveLocked()
 			a.mu.Unlock()
-			a.log.Warn("token renewal failed; session dropped", "forge", a.forge.Kind(), "login", cur.login, "err", err)
+			a.log.Warn("token renewal failed; session dropped", "idp", a.label(), "login", cur.login, "err", err)
 			return oauthSession{}, false
 		}
 		a.mu.Unlock()
-		a.log.Warn("token renewal failed; keeping the current token", "forge", a.forge.Kind(), "login", cur.login, "err", err)
+		a.log.Warn("token renewal failed; keeping the current token", "idp", a.label(), "login", cur.login, "err", err)
 		return cur, true
 	}
 	cur.token = grant.token
@@ -486,7 +555,7 @@ func (a *authManager) renewSession(ctx context.Context, sid string, s oauthSessi
 	a.sessions[sid] = cur
 	a.saveLocked()
 	a.mu.Unlock()
-	a.log.Info("token renewed", "forge", a.forge.Kind(), "login", cur.login)
+	a.log.Info("token renewed", "idp", a.label(), "login", cur.login)
 	return cur, true
 }
 
@@ -535,6 +604,10 @@ func (a *authManager) setCookie(w http.ResponseWriter, name, value string, maxAg
 
 func (a *authManager) handleLogin(w http.ResponseWriter, r *http.Request) {
 	state := randToken()
+	if a.oidc != nil {
+		a.handleOIDCLogin(w, r, state)
+		return
+	}
 	a.setCookie(w, stateCookie, state, 600)
 	q := url.Values{}
 	q.Set("client_id", a.cfg.ClientID)
@@ -580,21 +653,40 @@ func (a *authManager) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	grant, err := a.exchange(r.Context(), code)
-	if err != nil {
-		a.log.Error("oauth token exchange failed", "err", err)
-		writeJSONError(w, http.StatusBadGateway, "token exchange failed")
-		return
-	}
-	user, err := a.forge.User(r.Context(), a.client, grant.token)
-	if err != nil {
-		a.log.Error("oauth user lookup failed", "forge", a.forge.Kind(), "err", err)
-		writeJSONError(w, http.StatusBadGateway, "could not read the "+a.forge.Label()+" user")
-		return
-	}
-	login := user.Login
-	if a.learned != nil {
-		a.learned(user)
+	var grant ghGrant
+	var login string
+	if a.oidc != nil {
+		a.mu.Lock()
+		flow, ok := a.loginFlows[state]
+		delete(a.loginFlows, state)
+		a.mu.Unlock()
+		if !ok {
+			writeJSONError(w, http.StatusBadRequest, "invalid OAuth state")
+			return
+		}
+		var status int
+		grant, login, status, err = a.oidcSignIn(r.Context(), code, flow.verifier, flow.nonce)
+		if err != nil {
+			writeJSONError(w, status, err.Error())
+			return
+		}
+	} else {
+		grant, err = a.exchange(r.Context(), code)
+		if err != nil {
+			a.log.Error("oauth token exchange failed", "err", err)
+			writeJSONError(w, http.StatusBadGateway, "token exchange failed")
+			return
+		}
+		user, err := a.forge.User(r.Context(), a.client, grant.token)
+		if err != nil {
+			a.log.Error("oauth user lookup failed", "forge", a.forge.Kind(), "err", err)
+			writeJSONError(w, http.StatusBadGateway, "could not read the "+a.forge.Label()+" user")
+			return
+		}
+		login = user.Login
+		if a.learned != nil {
+			a.learned(user)
+		}
 	}
 
 	sid := randToken()
@@ -639,6 +731,13 @@ func (a *authManager) exchange(ctx context.Context, code string) (ghGrant, error
 // GitHub App's refresh token is single-use — the grant that comes back
 // carries its replacement; GitLab wants the redirect URI repeated).
 func (a *authManager) refreshGrant(ctx context.Context, refresh string) (ghGrant, error) {
+	if a.oidc != nil {
+		grant, person, err := a.oidc.refresh(ctx, refresh)
+		if err == nil && person != nil && a.directory != nil {
+			a.directory.setGroups(person.Login, person.Groups)
+		}
+		return grant, err
+	}
 	return a.tokenGrant(ctx, a.forge.RefreshForm(a.cfg.ClientID, a.cfg.ClientSecret, refresh, a.redirectURI()))
 }
 

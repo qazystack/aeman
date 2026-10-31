@@ -38,6 +38,9 @@ export interface AppConfig {
   cli?: string;
   /** The forge's host: "github.com", "gitlab.com", or a self-hosted one. */
   forgeHost?: string;
+  /** OAuth mode through an OIDC provider: its display name ("SSO" unless the
+   *  server names it). Absent when people sign in with the forge. */
+  signInName?: string;
 }
 
 export async function fetchConfig(): Promise<AppConfig> {

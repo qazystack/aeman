@@ -135,6 +135,47 @@ helm install aeman charts/aeman -n aeman -f values.yaml
 
 The rest follows the same variables: `repoTokens` gives a repository its own `AEMAN_GIT_TOKEN_<NAME>` (the name derived from the domain by the server's rule), `githubApp.id` with `githubApp.existingSecret` mounts the App's private key as a file for `AEMAN_GITHUB_APP_KEY_FILE`, and `config`, `timezone`, `scopes`, `extraEnv` and `extraArgs` cover the rest. Settings the server would refuse at start — an OAuth Secret without `forge.kind` or `baseUrl`, a `forge.url` on GitHub, more than one replica — fail the render instead. Without `oauth.existingSecret` the pod runs in the single-user local mode as whoever `AEMAN_GIT_TOKEN` belongs to. `charts/aeman/values.yaml` documents every key; `make chart` lints the chart and checks what it renders.
 
+## Sign in with an OIDC provider (optional)
+
+Instead of the forge, people can sign in through any OpenID Connect provider — Authentik, Keycloak, Zitadel, Dex, … — and the provider's **groups** decide what they may read and write. The forge stays where the repositories live; the server reaches it only with its own credential (`AEMAN_GIT_TOKEN`, a token per repository, or a GitHub App), so that credential must be able to push every repository of the board. The visitor's token is the provider's and never touches git. One sign-in per server: leave every forge `AEMAN_*_CLIENT_ID`/`_SECRET` pair unset.
+
+**At the provider**, create a client (an "application" or "OAuth2/OpenID provider", depending on the product):
+
+- **Type:** confidential, authorization-code flow (aeman adds PKCE S256 and a nonce).
+- **Redirect URI:** `https://aeman.example.com/auth/callback`.
+- **Scopes:** `openid profile email groups` — or whatever makes the provider put the person's groups in a claim.
+- **A groups claim.** Most providers need it switched on: in Keycloak add a *Group Membership* mapper to the client (token claim name `groups`, *Full group path* off); in Authentik the default `profile` scope mapping already sends `groups`; in Dex the `groups` scope does. An ID token then carries something like:
+
+```json
+{
+  "iss": "https://sso.example.com/realms/eng",
+  "preferred_username": "alice",
+  "name": "Alice Liddell",
+  "groups": ["engineering", "auditors"]
+}
+```
+
+**In `.env`:**
+
+```sh
+AEMAN_OIDC_ISSUER=https://sso.example.com/realms/eng
+AEMAN_OIDC_CLIENT_ID=aeman
+AEMAN_OIDC_CLIENT_SECRET=…
+# <domain>=<group>:<read|write>, comma-separated; * is every domain
+AEMAN_OIDC_ACCESS=aeman-db=engineering:write,*=auditors:read
+AEMAN_OIDC_NAME=Corp SSO          # the sign-in button; default "SSO"
+```
+
+The issuer must be https, and its discovery document (`<issuer>/.well-known/openid-configuration`) must name exactly that issuer. `AEMAN_OIDC_LOGIN_CLAIM` (default `preferred_username`) is the claim that becomes the login — what cards are assigned to and commits are attributed to; `AEMAN_OIDC_GROUPS_CLAIM` (default `groups`) the one groups are read from, the ID token first and userinfo when the ID token leaves it out.
+
+**The access rules.** Each rule gives one group `read` or `write` on one domain (the names in `AEMAN_REPOS`), or on every domain with `*`. `write` implies `read`, and rules for the same domain add up. **Access is denied by default:** a domain no rule opens to a person is invisible to them, and a person no rule opens any domain to is turned away right after signing in. As with the forge, a person who cannot read the primary repository has no board. A rule naming a domain the board does not have stops the server at start-up rather than quietly denying everyone.
+
+**Taking access away.** The answer is trusted for a minute. After that aeman asks the provider again (userinfo, with the session's access token, renewed with the refresh token when needed), so taking someone out of a group takes effect within a minute, and revoking their session at the provider signs them out of aeman.
+
+**Who can be assigned.** aeman learns people from the provider when they sign in and keeps a directory of them — login, name, avatar, groups, last sign-in — in `AEMAN_SESSION_FILE`, next to the sessions (it never holds a token). The assignee pickers offer the people in it whose groups can read the card's domain. **Someone who has never signed in is not in the directory, so they cannot be assigned yet**: ask them to sign in once.
+
+MCP clients connecting to `https://aeman.example.com/mcp` sign in through the same provider.
+
 ## Choosing the forge (optional)
 
 `AEMAN_FORGE=github|gitlab|gitea|forgejo` names the forge explicitly. Unset, it follows the primary repository's host: `github.com` → GitHub, a host containing `gitlab` → GitLab, a host containing `gitea` → Gitea, one containing `forgejo` or `codeberg` → Forgejo, anything else → GitHub unless `AEMAN_GITLAB_URL` or `AEMAN_GITEA_URL` is set (both set with no `AEMAN_FORGE` is refused). A self-hosted GitLab on a host without `gitlab` in its name therefore needs `AEMAN_GITLAB_URL` (or `AEMAN_FORGE=gitlab`, in which case the URL defaults to `https://<host of the primary repository>`); a Gitea or Forgejo likewise needs `AEMAN_GITEA_URL` or `AEMAN_FORGE=gitea`/`forgejo`.
@@ -153,7 +194,7 @@ A user whose token can't read that board sees an access-denied screen rather tha
 
 ## Notes
 
-- **Who sees what.** A visitor's own token decides per repository. GitHub: the repository's `permissions` — `pull` reads, `push`/`maintain`/`admin` write. GitLab: the project's access level — Reporter (20) reads, Developer (30) and above write; a Guest sees the project but not its board; public and internal projects read for anyone signed in. Gitea / Forgejo: the repository's `permissions` — `pull` reads, `push`/`admin` write; a public repository reads for anyone. The assignee pickers list the people who can read the repository: on GitHub each login's collaborator permission, asked with the server token; on GitLab the project's member list (inherited group members included), which also supplies display names and avatars; on Gitea / Forgejo each login's collaborator permission (ownership and organisation teams included), whose answer supplies them too.
+- **Who sees what.** A visitor's own token decides per repository (with an OIDC provider, the groups decide — see [above](#sign-in-with-an-oidc-provider)). GitHub: the repository's `permissions` — `pull` reads, `push`/`maintain`/`admin` write. GitLab: the project's access level — Reporter (20) reads, Developer (30) and above write; a Guest sees the project but not its board; public and internal projects read for anyone signed in. Gitea / Forgejo: the repository's `permissions` — `pull` reads, `push`/`admin` write; a public repository reads for anyone. The assignee pickers list the people who can read the repository: on GitHub each login's collaborator permission, asked with the server token; on GitLab the project's member list (inherited group members included), which also supplies display names and avatars; on Gitea / Forgejo each login's collaborator permission (ownership and organisation teams included), whose answer supplies them too.
 - **Sessions & the session store.** `AEMAN_SESSION_FILE` (on the `aeman_sessions` volume) always persists the dynamic MCP client registry. Sessions — the visitors' forge tokens — are written there only when `AEMAN_SESSION_KEY` is set, encrypted with it (AES-256-GCM); then restarts and redeploys keep users signed in and MCP tokens live. Without the key, sessions stay in memory and a restart signs everyone out — no plaintext token ever touches disk either way. Keep the key stable (changing or losing it just signs everyone out) and store it outside the session volume so a leak of that volume alone exposes nothing. GitHub's classic OAuth App tokens don't expire, so a session simply lasts up to 14 days.
 - **Scopes:** `AEMAN_SCOPES` overrides what the sign-in asks for; the default is `repo` on GitHub (a GitHub App ignores the parameter — its permissions come from the installation) `read_user read_api` on GitLab and `read:user read:repository` on Gitea / Forgejo.
 - **Cert storage:** the `caddy_data` volume persists issued certificates across restarts.

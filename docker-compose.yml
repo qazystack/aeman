@@ -29,6 +29,16 @@ services:
       AEMAN_GITLAB_CLIENT_SECRET: ${AEMAN_GITLAB_CLIENT_SECRET:-}
       AEMAN_GITEA_CLIENT_ID: ${AEMAN_GITEA_CLIENT_ID:-}
       AEMAN_GITEA_CLIENT_SECRET: ${AEMAN_GITEA_CLIENT_SECRET:-}
+      # Or sign in through an OpenID Connect provider instead of the forge
+      # (never together with a forge pair); see docs/deploy.md.
+      AEMAN_OIDC_ISSUER: ${AEMAN_OIDC_ISSUER:-}
+      AEMAN_OIDC_CLIENT_ID: ${AEMAN_OIDC_CLIENT_ID:-}
+      AEMAN_OIDC_CLIENT_SECRET: ${AEMAN_OIDC_CLIENT_SECRET:-}
+      AEMAN_OIDC_ACCESS: ${AEMAN_OIDC_ACCESS:-}
+      AEMAN_OIDC_SCOPES: ${AEMAN_OIDC_SCOPES:-}
+      AEMAN_OIDC_LOGIN_CLAIM: ${AEMAN_OIDC_LOGIN_CLAIM:-}
+      AEMAN_OIDC_GROUPS_CLAIM: ${AEMAN_OIDC_GROUPS_CLAIM:-}
+      AEMAN_OIDC_NAME: ${AEMAN_OIDC_NAME:-}
       # Public origin; the OAuth callback is <AEMAN_BASE_URL>/auth/callback.
       AEMAN_BASE_URL: ${AEMAN_BASE_URL:?set in .env}
       # OAuth scopes; empty means the forge's default.
