@@ -47,7 +47,7 @@ incl. the Gitea ones). Keep the chart at `charts/aeman/`, where upstream put it.
 - Fix any new lint findings the newer linter reports, in the same PR only if they are few and mechanical; otherwise list them.
 - Done when: all `ci.yml` jobs are green on the PR. This is meant for upstream as is.
 
-## 4. Generic OIDC sign-in — next
+## 4. Generic OIDC sign-in — done
 Sign people in through any OpenID Connect provider (Authentik, Keycloak, Zitadel, Dex, …) and decide their rights from the
 provider's groups. The git remote stays a forge (any of the three) reached only with the server's credential. Decision taken
 by the fork's architect so the work can go ahead; it is offered upstream as a draft and may be reshaped there.
@@ -93,7 +93,7 @@ implementation of it plus a sign-in flow; the domain, the board service, the sto
   comes from the forge.
 - Done when: CI green, the sign-in test passes end to end, and nothing under `pkg/` changed.
 
-## 5. Service tokens for agents and other non-interactive clients
+## 5. Service tokens for agents and other non-interactive clients — next
 Today every API and MCP caller is a browser session (or an MCP client that went through the browser OAuth flow), so a
 service that works the board for an agent account has no credential to use. Add static service tokens.
 - `AEMAN_SERVICE_TOKENS_FILE`: a file (mounted from a Secret) with one entry per line: `<login> <sha256-hex of the token>`
