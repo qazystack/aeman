@@ -1,0 +1,15 @@
+# Gitea / Forgejo, multi-user, on a self-hosted instance under a subpath,
+# with an existing claim and a static server token.
+repos:
+  - name: board
+    url: https://git.example.com/forge/example/aeman-db.git
+forge:
+  kind: forgejo
+  url: https://git.example.com/forge
+baseUrl: https://aeman.example.com
+gitToken:
+  existingSecret: aeman-git
+oauth:
+  existingSecret: aeman-oauth
+persistence:
+  existingClaim: aeman-data

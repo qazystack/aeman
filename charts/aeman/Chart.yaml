@@ -1,0 +1,11 @@
+apiVersion: v2
+name: aeman
+description: A short-term planning system for engineering teams, stored in git repositories
+type: application
+home: https://github.com/aenix-io/aeman
+sources:
+  - https://github.com/aenix-io/aeman
+# The chart's own version: bump it on every change to the chart.
+version: 0.2.0
+# The aeman release the chart deploys by default (the image tag is "v" + this).
+appVersion: "0.41.5"

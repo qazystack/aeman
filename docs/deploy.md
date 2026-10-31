@@ -85,6 +85,56 @@ The compose file builds from this checkout. To run a **published** image instead
 
 Caddy issues the certificate on first start (needs DNS + ports 80/443 already in place). Open `https://aeman.example.com`, click **Sign in with GitHub** (or **GitLab**, **Gitea**, **Forgejo**), and you're in.
 
+## Kubernetes (Helm)
+
+The chart at [`charts/aeman`](../charts/aeman) runs the published image (`ghcr.io/aenix-io/aeman`, tag `v` + the chart's `appVersion` unless `image.tag` says otherwise) as **one replica** with a `Recreate` strategy — the process locks its `--data` directory, so two pods on one volume cannot both run — behind a Service, an optional Ingress, and a PersistentVolumeClaim for `--data` (the clones and the session file). It runs as the image's non-root user on a read-only root file system and probes `/api/healthz`; the startup probe allows five minutes for the first clone. The chart's own `version` and the `appVersion` it deploys are separate fields of `Chart.yaml`.
+
+The chart never holds a secret value. Create the Secrets first, in the release's namespace, and name them in the values:
+
+```sh
+kubectl create namespace aeman
+kubectl -n aeman create secret generic aeman-git --from-literal=token=<server token>
+kubectl -n aeman create secret generic aeman-oauth \
+  --from-literal=client-id=<client id> --from-literal=client-secret=<client secret>
+kubectl -n aeman create secret generic aeman-session --from-literal=session-key=<random string>
+```
+
+Then a values file — the settings are the variables above, one key each:
+
+```yaml
+repos:                      # AEMAN_REPOS, the primary first
+  - name: board
+    url: https://github.com/acme/aeman-db.git
+forge:
+  kind: github              # AEMAN_FORGE; it also picks the client id/secret variables
+  url: ""                   # AEMAN_GITLAB_URL / AEMAN_GITEA_URL for a self-hosted forge
+baseUrl: https://aeman.example.com
+gitToken:
+  existingSecret: aeman-git # AEMAN_GIT_TOKEN
+oauth:
+  existingSecret: aeman-oauth
+session:
+  existingSecret: aeman-session
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    # The board keeps a WebSocket open (/api/v1/watch).
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  hosts:
+    - host: aeman.example.com
+      paths: [{path: /}]
+  tls:
+    - secretName: aeman-tls
+      hosts: [aeman.example.com]
+```
+
+```sh
+helm install aeman charts/aeman -n aeman -f values.yaml
+```
+
+The rest follows the same variables: `repoTokens` gives a repository its own `AEMAN_GIT_TOKEN_<NAME>` (the name derived from the domain by the server's rule), `githubApp.id` with `githubApp.existingSecret` mounts the App's private key as a file for `AEMAN_GITHUB_APP_KEY_FILE`, and `config`, `timezone`, `scopes`, `extraEnv` and `extraArgs` cover the rest. Settings the server would refuse at start — an OAuth Secret without `forge.kind` or `baseUrl`, a `forge.url` on GitHub, more than one replica — fail the render instead. Without `oauth.existingSecret` the pod runs in the single-user local mode as whoever `AEMAN_GIT_TOKEN` belongs to. `charts/aeman/values.yaml` documents every key; `make chart` lints the chart and checks what it renders.
+
 ## Choosing the forge (optional)
 
 `AEMAN_FORGE=github|gitlab|gitea|forgejo` names the forge explicitly. Unset, it follows the primary repository's host: `github.com` → GitHub, a host containing `gitlab` → GitLab, a host containing `gitea` → Gitea, one containing `forgejo` or `codeberg` → Forgejo, anything else → GitHub unless `AEMAN_GITLAB_URL` or `AEMAN_GITEA_URL` is set (both set with no `AEMAN_FORGE` is refused). A self-hosted GitLab on a host without `gitlab` in its name therefore needs `AEMAN_GITLAB_URL` (or `AEMAN_FORGE=gitlab`, in which case the URL defaults to `https://<host of the primary repository>`); a Gitea or Forgejo likewise needs `AEMAN_GITEA_URL` or `AEMAN_FORGE=gitea`/`forgejo`.

@@ -2,7 +2,7 @@ BINARY := aeman
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: all build frontend backend generate lint test fmt tidy run clean
+.PHONY: all build frontend backend generate lint test chart fmt tidy run clean
 
 all: build
 
@@ -29,6 +29,10 @@ lint:
 ## test: run Go tests
 test:
 	go test -race ./...
+
+## chart: lint the Helm chart and check what it renders (needs helm 3)
+chart:
+	charts/test.sh
 
 ## fmt: format Go code
 fmt:

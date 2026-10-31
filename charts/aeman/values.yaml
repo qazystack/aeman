@@ -1,0 +1,177 @@
+# Default values for the aeman chart. Every setting maps onto a flag or an
+# AEMAN_* variable of `aeman serve`; docs/api.md (Configuration) is the
+# reference for what each one means. Secrets are never values here: the chart
+# only names Secrets that already exist in the release's namespace.
+
+# aeman runs as ONE replica: it holds an exclusive lock on its --data
+# directory, keeps sessions in memory, and the volume is ReadWriteOnce.
+replicaCount: 1
+
+image:
+  repository: ghcr.io/aenix-io/aeman
+  # Empty means "v" + the chart's appVersion (the release tags are vX.Y.Z).
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Names of existing image pull Secrets, e.g. [{name: my-registry}].
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# The board's repositories (AEMAN_REPOS): the primary first, HTTPS clone URLs.
+#   repos:
+#     - name: board
+#       url: https://github.com/acme/aeman-db.git
+repos: []
+
+forge:
+  # github, gitlab, gitea or forgejo (AEMAN_FORGE). Empty follows the primary
+  # repository's host.
+  kind: ""
+  # Base URL of a self-hosted GitLab, Gitea or Forgejo (AEMAN_GITLAB_URL or
+  # AEMAN_GITEA_URL, picked by kind, which must then be set). Empty means
+  # https://<host of the primary repository>.
+  url: ""
+
+# Public origin of the board (AEMAN_BASE_URL); the forge's OAuth callback is
+# <baseUrl>/auth/callback. Required with oauth.existingSecret.
+baseUrl: ""
+
+# OAuth scopes (AEMAN_SCOPES); empty means the forge's default.
+scopes: ""
+
+# The board's day time zone, an IANA name (AEMAN_TZ), e.g. Europe/Berlin.
+timezone: ""
+
+# The server's own git credential (AEMAN_GIT_TOKEN): fetch, push, membership
+# checks. Required in the OAuth mode unless a GitHub App mints it.
+gitToken:
+  existingSecret: ""
+  key: token
+
+# One repository's own credential (AEMAN_GIT_TOKEN_<NAME>), named after its
+# domain in `repos`:
+#   repoTokens:
+#     - name: founders
+#       existingSecret: founders-token
+#       key: token
+repoTokens: []
+
+# The OAuth application visitors sign in through. Setting existingSecret turns
+# on the self-hosted multi-user mode; the variables are those of the forge in
+# forge.kind (AEMAN_<FORGE>_CLIENT_ID / _SECRET; forgejo uses the Gitea ones),
+# so forge.kind is then required.
+oauth:
+  existingSecret: ""
+  clientIdKey: client-id
+  clientSecretKey: client-secret
+
+# GitHub only: an App that mints the server credential instead of a static
+# token (AEMAN_GITHUB_APP_ID, and the private key mounted as a file for
+# AEMAN_GITHUB_APP_KEY_FILE).
+githubApp:
+  id: ""
+  existingSecret: ""
+  key: private-key.pem
+
+session:
+  # Secret holding the key that encrypts the session store (AEMAN_SESSION_KEY).
+  # Without it sessions stay in memory and a restart signs everyone out.
+  existingSecret: ""
+  key: session-key
+  # Session file on the data volume (AEMAN_SESSION_FILE); empty means
+  # <persistence.mountPath>/sessions.json.
+  file: ""
+
+# Storage and sync settings, each passed only when set.
+config:
+  history: ""        # AEMAN_HISTORY, e.g. 2w
+  historyMax: ""     # AEMAN_HISTORY_MAX, e.g. 1y
+  syncInterval: ""   # AEMAN_SYNC_INTERVAL, e.g. 15s
+  unpushedWarn: ""   # AEMAN_UNPUSHED_WARN, e.g. 5m
+  committer: ""      # AEMAN_COMMITTER, e.g. "aeman <aeman@example.com>"
+  authorEmail: ""    # AEMAN_AUTHOR_EMAIL, e.g. "{login}@example.com"
+
+# More environment variables, in the container's env syntax.
+extraEnv: []
+# More arguments after `serve --addr=0.0.0.0:<port> --open=false`.
+extraArgs: []
+
+service:
+  type: ClusterIP
+  port: 8765
+
+ingress:
+  enabled: false
+  className: ""
+  # Extra annotations, e.g. cert-manager's cluster issuer. The board keeps a
+  # WebSocket open (/api/v1/watch): raise the proxy's read timeout.
+  annotations: {}
+  hosts:
+    - host: aeman.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  # - secretName: aeman-tls
+  #   hosts: [aeman.example.com]
+  tls: []
+
+# The --data volume: the repository clones and the session file.
+persistence:
+  enabled: true
+  # Empty uses the cluster's default StorageClass.
+  storageClass: ""
+  # Use an existing claim instead of creating one.
+  existingClaim: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 1Gi
+  mountPath: /data
+
+livenessProbe:
+  httpGet:
+    path: /api/healthz
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 15
+readinessProbe:
+  httpGet:
+    path: /api/healthz
+    port: http
+  initialDelaySeconds: 3
+  periodSeconds: 5
+# The first start clones the repositories; give it time before liveness counts.
+startupProbe:
+  httpGet:
+    path: /api/healthz
+    port: http
+  periodSeconds: 5
+  failureThreshold: 60
+
+podSecurityContext:
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
