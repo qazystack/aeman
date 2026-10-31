@@ -16,6 +16,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
+	"golang.org/x/oauth2"
 )
 
 // authCodeTTL bounds how long an issued MCP authorization code stays redeemable.
@@ -200,15 +201,33 @@ func (a *authManager) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	state := randToken()
-	a.mu.Lock()
-	a.pruneEphemeralLocked()
-	a.pendingAuth[state] = pendingAuth{
+	pa := pendingAuth{
 		clientID:      clientID,
 		redirectURI:   redirectURI,
 		codeChallenge: challenge,
 		clientState:   clientState,
 		created:       time.Now(),
 	}
+	if a.oidc != nil {
+		// The provider leg is a sign-in like the browser's: PKCE and a nonce
+		// of its own, kept with the pending authorization.
+		pa.verifier, pa.nonce = oauth2.GenerateVerifier(), randToken()
+		dest, err := a.oidc.authCodeURL(r.Context(), state, pa.nonce, pa.verifier)
+		if err != nil {
+			a.log.Error("mcp oauth: oidc provider unavailable", "err", err)
+			a.redirectError(w, r, redirectURI, clientState, "temporarily_unavailable", "the sign-in provider is unavailable")
+			return
+		}
+		a.mu.Lock()
+		a.pruneEphemeralLocked()
+		a.pendingAuth[state] = pa
+		a.mu.Unlock()
+		http.Redirect(w, r, dest, http.StatusFound)
+		return
+	}
+	a.mu.Lock()
+	a.pruneEphemeralLocked()
+	a.pendingAuth[state] = pa
 	a.mu.Unlock()
 
 	gh := url.Values{}
@@ -232,17 +251,34 @@ func (a *authManager) handleMCPCallback(w http.ResponseWriter, r *http.Request, 
 		a.redirectError(w, r, p.redirectURI, p.clientState, "invalid_request", "missing authorization code")
 		return
 	}
-	grant, err := a.exchange(r.Context(), code)
-	if err != nil {
-		a.log.Error("mcp oauth token exchange failed", "err", err)
-		a.redirectError(w, r, p.redirectURI, p.clientState, "server_error", "token exchange failed")
-		return
-	}
-	login, err := a.fetchLogin(r.Context(), grant.token)
-	if err != nil {
-		a.log.Error("mcp oauth user lookup failed", "err", err)
-		a.redirectError(w, r, p.redirectURI, p.clientState, "server_error", "could not read GitHub user")
-		return
+	var grant ghGrant
+	var login string
+	if a.oidc != nil {
+		var status int
+		var err error
+		grant, login, status, err = a.oidcSignIn(r.Context(), code, p.verifier, p.nonce)
+		if err != nil {
+			code := "server_error"
+			if status == http.StatusForbidden || status == http.StatusUnauthorized {
+				code = "access_denied"
+			}
+			a.redirectError(w, r, p.redirectURI, p.clientState, code, err.Error())
+			return
+		}
+	} else {
+		var err error
+		grant, err = a.exchange(r.Context(), code)
+		if err != nil {
+			a.log.Error("mcp oauth token exchange failed", "err", err)
+			a.redirectError(w, r, p.redirectURI, p.clientState, "server_error", "token exchange failed")
+			return
+		}
+		login, err = a.fetchLogin(r.Context(), grant.token)
+		if err != nil {
+			a.log.Error("mcp oauth user lookup failed", "err", err)
+			a.redirectError(w, r, p.redirectURI, p.clientState, "server_error", "could not read GitHub user")
+			return
+		}
 	}
 
 	if isLoopbackRedirect(p.redirectURI) {
@@ -310,7 +346,7 @@ func (a *authManager) promptConsent(w http.ResponseWriter, grant ghGrant, login 
 	}
 	a.mu.Unlock()
 	a.setCookie(w, consentCookie, browserToken, int(consentTTL/time.Second))
-	renderConsentPage(w, consentID, login, p.clientID, p.redirectURI, a.forge.Label())
+	renderConsentPage(w, consentID, login, p.clientID, p.redirectURI, a.label())
 }
 
 // handleConsent finalizes an MCP authorization the user approved (or aborts the
@@ -557,6 +593,11 @@ func (a *authManager) pruneEphemeralLocked() {
 	for id, pc := range a.pendingConsent {
 		if now.After(pc.expiry) {
 			delete(a.pendingConsent, id)
+		}
+	}
+	for state, f := range a.loginFlows {
+		if now.Sub(f.created) > pendingAuthTTL {
+			delete(a.loginFlows, state)
 		}
 	}
 }

@@ -131,6 +131,7 @@ func runServe(args []string) error {
 	open := fs.Bool("open", true, "open the UI in a browser on start")
 	verbose := fs.Bool("verbose", false, "enable debug logging")
 	gf := addGitFlags(fs, os.Getenv)
+	of := addOIDCFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -151,12 +152,18 @@ func runServe(args []string) error {
 	// Multi-user OAuth mode is enabled when one forge's client credentials
 	// are set in the environment (kept out of flags so secrets stay out of
 	// `ps`); the pair must belong to the forge the board lives on.
-	var auth *server.OAuthConfig
+	//
+	// Or, with an OIDC issuer, people sign in through that provider and
+	// their groups decide their rights; the forge is only the git remote.
+	auth, err := oidcAuth(of, gitCfg, osEnv)
+	if err != nil {
+		return err
+	}
 	id, secret, err := oauthPair(gitCfg.Forge, osEnv)
 	if err != nil {
 		return err
 	}
-	if id != "" {
+	if id != "" && auth == nil {
 		baseURL := os.Getenv("AEMAN_BASE_URL")
 		if baseURL == "" {
 			return fmt.Errorf("AEMAN_BASE_URL is required when %s OAuth is configured", gitCfg.Forge.Label())

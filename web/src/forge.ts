@@ -8,7 +8,7 @@ import type { AppConfig } from "./api/client";
 
 export type ForgeKind = "github" | "gitlab";
 
-export type ForgeConfig = Pick<AppConfig, "forge" | "forgeLabel" | "cli" | "forgeHost">;
+export type ForgeConfig = Pick<AppConfig, "forge" | "forgeLabel" | "cli" | "forgeHost" | "signInName">;
 
 export interface ForgeCopy {
   kind: ForgeKind;
@@ -43,15 +43,18 @@ export function forgeCopy(config: ForgeConfig | null | undefined): ForgeCopy {
   const label = config?.forgeLabel || defaults.label;
   const cli = config?.cli || defaults.cli;
   const host = config?.forgeHost || defaults.host;
+  // A server that signs people in through an OIDC provider names it: the
+  // sign-in copy is the provider's, while the forge stays the board's host.
+  const sso = config?.signInName;
   return {
     kind,
     label,
     cli,
     host,
     signInTitle: "Sign in to aeman",
-    signInLead: `Connect your ${label} account to open the board.`,
-    signInButton: `Sign in with ${label}`,
+    signInLead: `Connect your ${sso || label} account to open the board.`,
+    signInButton: `Sign in with ${sso || label}`,
     noTokenHint: `No ${label} token — run aeman login, or ${cli} auth login, in the terminal where aeman runs.`,
-    connectHint: `Sign in with ${label} on first use (OAuth, no token stored).`,
+    connectHint: `Sign in with ${sso || label} on first use (OAuth, no token stored).`,
   };
 }

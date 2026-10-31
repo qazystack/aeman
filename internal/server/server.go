@@ -143,14 +143,25 @@ func (s *Server) initGit(opts Options, f forge.Forge) error {
 		names = append(names, r.Name)
 	}
 	s.visibleBE = &visibleBackend{Backend: s.gitBE, primary: names[0], domains: names}
-	if opts.Auth != nil {
+	switch {
+	case opts.Auth != nil && opts.Auth.OIDC != nil:
+		// The visitor's token is the OIDC provider's: their groups, by the
+		// operator's rules, say what they may read and write (G81).
+		if err := checkOIDCRules(opts.Auth.OIDC.Access, names); err != nil {
+			return err
+		}
+		oa := newOIDCAccess(s.auth.oidc, s.auth.directory, opts.Auth.OIDC.Access, names)
+		oa.logger = s.log
+		s.auth.admit = oa.admit
+		s.access = oa
+	case opts.Auth != nil:
 		// Each visitor brings their own token: the forge says what it
 		// may read and write, per domain.
 		fa := newForgeAccess(f, s.httpClient, opts.Git.Repos, opts.Git.Token, s.people)
 		fa.app = opts.Git.App
 		fa.logger = s.log
 		s.access = fa
-	} else {
+	default:
 		s.access = openAccess{domains: names}
 	}
 	return nil
@@ -225,6 +236,26 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	s.auth.handleCallback(w, r)
 }
 
+// initAuth builds the sign-in of the OAuth mode — before the board opens:
+// in the OIDC mode the access layer is built over the auth manager's
+// provider and directory. No-op outside the OAuth mode.
+func (s *Server) initAuth(opts Options, f forge.Forge) error {
+	if opts.Auth == nil {
+		return nil
+	}
+	if opts.Auth.OIDC != nil && opts.Git == nil {
+		return errors.New("OIDC sign-in needs the board's repositories: the access rules name its domains")
+	}
+	s.auth = newAuthManager(*opts.Auth, f, opts.Logger)
+	s.auth.learned = s.people.learnUser
+	if s.auth.directory != nil {
+		// The people are the ones who signed in through the provider, not
+		// the forge's users of the same name.
+		s.people.lookup = s.auth.directory.lookup
+	}
+	return nil
+}
+
 // New builds a Server from the given options.
 func New(opts Options) (*Server, error) {
 	if opts.Addr == "" {
@@ -292,6 +323,9 @@ func New(opts Options) (*Server, error) {
 		}
 	}
 	s.people = newPeople(f, s.httpClient, peopleToken)
+	if err := s.initAuth(opts, f); err != nil {
+		return nil, err
+	}
 	s.store = newBoardStore()
 	s.store.log = s.log
 	s.store.member = s.people.member // the forge the identities come from
@@ -323,11 +357,6 @@ func New(opts Options) (*Server, error) {
 			s.setup = &setupState{problem: err.Error(), installURL: notInstalled.InstallURL, forge: f}
 		}
 	}
-	if opts.Auth != nil {
-		s.auth = newAuthManager(*opts.Auth, f, opts.Logger)
-		s.auth.learned = s.people.learnUser
-	}
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/healthz", s.handleHealthz)
 	// GitHub sends the person here after they install (or update) the
@@ -625,6 +654,9 @@ type configResponse struct {
 	ForgeLabel string `json:"forgeLabel"`
 	ForgeHost  string `json:"forgeHost,omitempty"`
 	CLI        string `json:"cli"`
+	// SignInName is the identity provider's display name when people sign
+	// in through OIDC rather than the forge ("SSO" unless configured).
+	SignInName string `json:"signInName,omitempty"`
 }
 
 // forgeHost is the host the board's repositories live on — the primary's,
@@ -655,6 +687,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		resp.Mode = "oauth"
 		resp.AuthURL = "/auth/login"
 		resp.LogoutURL = "/auth/logout"
+		if s.auth.oidc != nil {
+			resp.SignInName = s.auth.label()
+		}
 		if sess, ok := s.auth.session(r); ok {
 			resp.Authenticated = true
 			resp.TokenAvailable = true

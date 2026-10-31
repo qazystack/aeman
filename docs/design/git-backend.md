@@ -679,6 +679,15 @@ forge wants), never a flag.
 | --- | --- | --- | --- | --- |
 | local (single user) | the owner of the token the chain elected, asked of the forge | all configured | none beyond the forge's own on push | `AEMAN_GIT_TOKEN` if set, else the forge's own variables, then the OS keychain (`aeman login`), then `gh auth token` / `glab config get token` |
 | self-hosted (OAuth) | the session's login, as today | those the visitor `CanRead` | the target domain must be `CanWrite` for the visitor | `AEMAN_GIT_TOKEN` |
+| self-hosted (OIDC) | the OIDC provider's login claim | those the visitor's groups open by the `--oidc-access` rules (deny by default) | the target domain must be open for write by those rules | `AEMAN_GIT_TOKEN` (the visitor's token is the provider's and never reaches git) |
+
+In the OIDC mode identity does not come from the forge at all: the
+provider signs the visitor in, the ID token's groups (refreshed from
+userinfo every 60 s, the same freshness) decide the rights, and the
+people who may be assigned are the ones who have signed in — the
+directory in the session file. The forge is only the remote, so nothing
+in the repositories changes: a commit's author is still `{login}` by
+`--author-email`, the login being the provider's.
 
 The forge adapter provides **two** probes, `CanRead(ctx, user, repo)`
 and `CanWrite(ctx, user, repo)`, answered from the forge's permission

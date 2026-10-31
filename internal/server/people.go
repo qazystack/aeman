@@ -26,7 +26,10 @@ type people struct {
 	// elected. "" asks as nobody, which gitlab.com allows for public
 	// profiles.
 	token func(ctx context.Context) string
-	now   func() time.Time
+	// lookup, when set, answers instead of the forge — the OIDC directory,
+	// where the people are those who signed in through the provider.
+	lookup func(ctx context.Context, login string) (forge.Person, error)
+	now    func() time.Time
 
 	mu    sync.Mutex
 	known map[string]knownPerson
@@ -113,7 +116,13 @@ func (p *people) person(login string) forge.Person {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), peopleLookupTimeout)
 	defer cancel()
-	found, err := p.forge.Lookup(ctx, p.client, p.token(ctx), login)
+	var found forge.Person
+	var err error
+	if p.lookup != nil {
+		found, err = p.lookup(ctx, login)
+	} else {
+		found, err = p.forge.Lookup(ctx, p.client, p.token(ctx), login)
+	}
 	switch {
 	case err == nil:
 		found.Login = login

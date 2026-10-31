@@ -74,6 +74,47 @@ The compose file builds from this checkout. To run a **published** image instead
 
 Caddy issues the certificate on first start (needs DNS + ports 80/443 already in place). Open `https://aeman.example.com`, click **Sign in with GitHub** (or **GitLab**), and you're in.
 
+## Sign in with an OIDC provider (optional)
+
+Instead of the forge, people can sign in through any OpenID Connect provider — Authentik, Keycloak, Zitadel, Dex, … — and the provider's **groups** decide what they may read and write. The forge stays where the repositories live; the server reaches it only with its own credential (`AEMAN_GIT_TOKEN`, a token per repository, or a GitHub App), so that credential must be able to push every repository of the board. The visitor's token is the provider's and never touches git. One sign-in per server: leave every forge `AEMAN_*_CLIENT_ID`/`_SECRET` pair unset.
+
+**At the provider**, create a client (an "application" or "OAuth2/OpenID provider", depending on the product):
+
+- **Type:** confidential, authorization-code flow (aeman adds PKCE S256 and a nonce).
+- **Redirect URI:** `https://aeman.example.com/auth/callback`.
+- **Scopes:** `openid profile email groups` — or whatever makes the provider put the person's groups in a claim.
+- **A groups claim.** Most providers need it switched on: in Keycloak add a *Group Membership* mapper to the client (token claim name `groups`, *Full group path* off); in Authentik the default `profile` scope mapping already sends `groups`; in Dex the `groups` scope does. An ID token then carries something like:
+
+```json
+{
+  "iss": "https://sso.example.com/realms/eng",
+  "preferred_username": "alice",
+  "name": "Alice Liddell",
+  "groups": ["engineering", "auditors"]
+}
+```
+
+**In `.env`:**
+
+```sh
+AEMAN_OIDC_ISSUER=https://sso.example.com/realms/eng
+AEMAN_OIDC_CLIENT_ID=aeman
+AEMAN_OIDC_CLIENT_SECRET=…
+# <domain>=<group>:<read|write>, comma-separated; * is every domain
+AEMAN_OIDC_ACCESS=aeman-db=engineering:write,*=auditors:read
+AEMAN_OIDC_NAME=Corp SSO          # the sign-in button; default "SSO"
+```
+
+The issuer must be https, and its discovery document (`<issuer>/.well-known/openid-configuration`) must name exactly that issuer. `AEMAN_OIDC_LOGIN_CLAIM` (default `preferred_username`) is the claim that becomes the login — what cards are assigned to and commits are attributed to; `AEMAN_OIDC_GROUPS_CLAIM` (default `groups`) the one groups are read from, the ID token first and userinfo when the ID token leaves it out.
+
+**The access rules.** Each rule gives one group `read` or `write` on one domain (the names in `AEMAN_REPOS`), or on every domain with `*`. `write` implies `read`, and rules for the same domain add up. **Access is denied by default:** a domain no rule opens to a person is invisible to them, and a person no rule opens any domain to is turned away right after signing in. As with the forge, a person who cannot read the primary repository has no board. A rule naming a domain the board does not have stops the server at start-up rather than quietly denying everyone.
+
+**Taking access away.** The answer is trusted for a minute. After that aeman asks the provider again (userinfo, with the session's access token, renewed with the refresh token when needed), so taking someone out of a group takes effect within a minute, and revoking their session at the provider signs them out of aeman.
+
+**Who can be assigned.** aeman learns people from the provider when they sign in and keeps a directory of them — login, name, avatar, groups, last sign-in — in `AEMAN_SESSION_FILE`, next to the sessions (it never holds a token). The assignee pickers offer the people in it whose groups can read the card's domain. **Someone who has never signed in is not in the directory, so they cannot be assigned yet**: ask them to sign in once.
+
+MCP clients connecting to `https://aeman.example.com/mcp` sign in through the same provider.
+
 ## Choosing the forge (optional)
 
 `AEMAN_FORGE=github|gitlab` names the forge explicitly. Unset, it follows the primary repository's host: `github.com` → GitHub, a host containing `gitlab` → GitLab, anything else → GitHub unless `AEMAN_GITLAB_URL` is set. A self-hosted GitLab on a host without `gitlab` in its name therefore needs `AEMAN_GITLAB_URL` (or `AEMAN_FORGE=gitlab`, in which case the URL defaults to `https://<host of the primary repository>`).
@@ -92,7 +133,7 @@ A user whose token can't read that board sees an access-denied screen rather tha
 
 ## Notes
 
-- **Who sees what.** A visitor's own token decides per repository. GitHub: the repository's `permissions` — `pull` reads, `push`/`maintain`/`admin` write. GitLab: the project's access level — Reporter (20) reads, Developer (30) and above write; a Guest sees the project but not its board; public and internal projects read for anyone signed in. The assignee pickers list the people who can read the repository: on GitHub each login's collaborator permission, asked with the server token; on GitLab the project's member list (inherited group members included), which also supplies display names and avatars.
+- **Who sees what.** A visitor's own token decides per repository (with an OIDC provider, the groups decide — see [above](#sign-in-with-an-oidc-provider)). GitHub: the repository's `permissions` — `pull` reads, `push`/`maintain`/`admin` write. GitLab: the project's access level — Reporter (20) reads, Developer (30) and above write; a Guest sees the project but not its board; public and internal projects read for anyone signed in. The assignee pickers list the people who can read the repository: on GitHub each login's collaborator permission, asked with the server token; on GitLab the project's member list (inherited group members included), which also supplies display names and avatars.
 - **Sessions & the session store.** `AEMAN_SESSION_FILE` (on the `aeman_sessions` volume) always persists the dynamic MCP client registry. Sessions — the visitors' forge tokens — are written there only when `AEMAN_SESSION_KEY` is set, encrypted with it (AES-256-GCM); then restarts and redeploys keep users signed in and MCP tokens live. Without the key, sessions stay in memory and a restart signs everyone out — no plaintext token ever touches disk either way. Keep the key stable (changing or losing it just signs everyone out) and store it outside the session volume so a leak of that volume alone exposes nothing. GitHub's classic OAuth App tokens don't expire, so a session simply lasts up to 14 days.
 - **Scopes:** `AEMAN_SCOPES` overrides what the sign-in asks for; the default is `repo` on GitHub (a GitHub App ignores the parameter — its permissions come from the installation) and `read_user read_api` on GitLab.
 - **Cert storage:** the `caddy_data` volume persists issued certificates across restarts.

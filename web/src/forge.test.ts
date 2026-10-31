@@ -81,4 +81,17 @@ describe("forgeCopy", () => {
   it("keeps the sign-in title forge-neutral", () => {
     expect(forgeCopy({ forge: "gitlab" }).signInTitle).toBe(github.signInTitle);
   });
+  it("names the OIDC provider in the sign-in copy, and keeps the forge as the board's host", () => {
+    const copy = forgeCopy({ forge: "gitlab", forgeLabel: "GitLab", forgeHost: "git.example.test", signInName: "Corp SSO" });
+    expect(copy.signInButton).toBe("Sign in with Corp SSO");
+    expect(copy.signInLead).toBe("Connect your Corp SSO account to open the board.");
+    expect(copy.connectHint).toBe("Sign in with Corp SSO on first use (OAuth, no token stored).");
+    expect(copy.kind).toBe("gitlab");
+    expect(copy.label).toBe("GitLab");
+    expect(copy.host).toBe("git.example.test");
+  });
+
+  it("falls back to the forge when the provider's name is empty on the wire", () => {
+    expect(forgeCopy({ signInName: "" })).toEqual(github);
+  });
 });
