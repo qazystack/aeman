@@ -1,0 +1,20 @@
+{{- if not .Values.repos }}
+No repos are set: aeman refuses to start without the board's repositories.
+Set repos (name and HTTPS clone URL, the primary first) and upgrade.
+{{- else }}
+aeman is starting: the first start clones {{ len .Values.repos }} repositor{{ if eq (len .Values.repos) 1 }}y{{ else }}ies{{ end }} into {{ .Values.persistence.mountPath }}.
+{{- end }}
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}/
+{{- end }}
+{{- else }}
+  kubectl port-forward svc/{{ include "aeman.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  then open http://127.0.0.1:{{ .Values.service.port }}/
+{{- end }}
+{{- if not .Values.oauth.existingSecret }}
+
+No oauth.existingSecret: the server runs in the single-user local mode, as
+whoever its git token belongs to. Name an OAuth application's Secret to let
+people sign in with their own forge accounts.
+{{- end }}

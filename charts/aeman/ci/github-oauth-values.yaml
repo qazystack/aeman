@@ -1,0 +1,35 @@
+# GitHub, multi-user: an OAuth/App client, a GitHub App minting the server
+# credential, a second repository with its own token, an Ingress with TLS.
+repos:
+  - name: board
+    url: https://github.com/example/aeman-db.git
+  - name: founders-x
+    url: https://github.com/example-two/aeman-founders.git
+forge:
+  kind: github
+baseUrl: https://aeman.example.com
+timezone: Europe/Berlin
+oauth:
+  existingSecret: aeman-oauth
+githubApp:
+  id: "123456"
+  existingSecret: aeman-github-app
+repoTokens:
+  - name: founders-x
+    existingSecret: aeman-founders-token
+session:
+  existingSecret: aeman-session
+config:
+  syncInterval: 30s
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  hosts:
+    - host: aeman.example.com
+      paths:
+        - path: /
+  tls:
+    - secretName: aeman-tls
+      hosts: [aeman.example.com]

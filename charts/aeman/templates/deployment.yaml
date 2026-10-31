@@ -1,0 +1,189 @@
+{{- include "aeman.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aeman.fullname" . }}
+  labels:
+    {{- include "aeman.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # The data directory is locked by the running process and the volume is
+  # ReadWriteOnce: never run the old and the new pod at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "aeman.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "aeman.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: aeman
+          image: {{ include "aeman.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - serve
+            - --addr=0.0.0.0:{{ .Values.service.port }}
+            - --open=false
+            {{- range .Values.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            {{- with .Values.repos }}
+            - name: AEMAN_REPOS
+              value: {{ include "aeman.repos" $ | quote }}
+            {{- end }}
+            - name: AEMAN_DATA
+              value: {{ .Values.persistence.mountPath | quote }}
+            - name: AEMAN_SESSION_FILE
+              value: {{ .Values.session.file | default (printf "%s/sessions.json" .Values.persistence.mountPath) | quote }}
+            {{- with .Values.forge.kind }}
+            - name: AEMAN_FORGE
+              value: {{ . | lower | quote }}
+            {{- end }}
+            {{- with .Values.forge.url }}
+            - name: AEMAN_{{ include "aeman.forgeEnvName" $ }}_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.baseUrl }}
+            - name: AEMAN_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.scopes }}
+            - name: AEMAN_SCOPES
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.timezone }}
+            - name: AEMAN_TZ
+              value: {{ . | quote }}
+            {{- end }}
+            {{- range $key, $name := dict "history" "AEMAN_HISTORY" "historyMax" "AEMAN_HISTORY_MAX" "syncInterval" "AEMAN_SYNC_INTERVAL" "unpushedWarn" "AEMAN_UNPUSHED_WARN" "committer" "AEMAN_COMMITTER" "authorEmail" "AEMAN_AUTHOR_EMAIL" }}
+            {{- with index $.Values.config $key }}
+            - name: {{ $name }}
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.gitToken.existingSecret }}
+            - name: AEMAN_GIT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.gitToken.key }}
+            {{- end }}
+            {{- range .Values.repoTokens }}
+            - name: {{ include "aeman.repoTokenEnv" .name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "repoTokens: every entry needs existingSecret" .existingSecret }}
+                  key: {{ .key | default "token" }}
+            {{- end }}
+            {{- with .Values.oauth.existingSecret }}
+            - name: AEMAN_{{ include "aeman.forgeEnvName" $ }}_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.oauth.clientIdKey }}
+            - name: AEMAN_{{ include "aeman.forgeEnvName" $ }}_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.oauth.clientSecretKey }}
+            {{- end }}
+            {{- if .Values.githubApp.id }}
+            - name: AEMAN_GITHUB_APP_ID
+              value: {{ .Values.githubApp.id | quote }}
+            - name: AEMAN_GITHUB_APP_KEY_FILE
+              value: /etc/aeman/github-app/{{ .Values.githubApp.key }}
+            {{- end }}
+            {{- with .Values.session.existingSecret }}
+            - name: AEMAN_SESSION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.session.key }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath }}
+            # The root file system is read-only; git and Go write temp files here.
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.githubApp.existingSecret }}
+            - name: github-app
+              mountPath: /etc/aeman/github-app
+              readOnly: true
+            {{- end }}
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "aeman.claimName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+        {{- with .Values.githubApp.existingSecret }}
+        - name: github-app
+          secret:
+            secretName: {{ . }}
+            items:
+              - key: {{ $.Values.githubApp.key }}
+                path: {{ $.Values.githubApp.key }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
