@@ -60,6 +60,10 @@ type Options struct {
 	// the authority on repository access, the directory of names and
 	// avatars, the git credential's dialect. GitHub when nil.
 	Forge forge.Forge
+	// ServiceTokensFile names the file of service tokens (G82): one line
+	// per token, `<login> <sha256-hex>` and in the OIDC mode `groups=…`.
+	// Only a multi-user server over the board's repositories takes it.
+	ServiceTokensFile string
 	// CLI is where a single-user server reads its credential and the
 	// person it belongs to — the environment, the OS keychain, or the
 	// forge's own tool; the gh CLI when nil. Unused in OAuth mode.
@@ -241,12 +245,25 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 // provider and directory. No-op outside the OAuth mode.
 func (s *Server) initAuth(opts Options, f forge.Forge) error {
 	if opts.Auth == nil {
+		if opts.ServiceTokensFile != "" {
+			return errors.New("service tokens need the multi-user mode (a forge OAuth application or an OIDC issuer): the single-user server acts as its one person")
+		}
 		return nil
+	}
+	if opts.ServiceTokensFile != "" && opts.Git == nil {
+		return errors.New("service tokens need the board's repositories: their rights are decided per domain")
 	}
 	if opts.Auth.OIDC != nil && opts.Git == nil {
 		return errors.New("OIDC sign-in needs the board's repositories: the access rules name its domains")
 	}
 	s.auth = newAuthManager(*opts.Auth, f, opts.Logger)
+	if opts.ServiceTokensFile != "" {
+		st, err := openServiceTokens(opts.ServiceTokensFile, opts.Auth.OIDC != nil, opts.Logger)
+		if err != nil {
+			return err
+		}
+		s.auth.services = st
+	}
 	s.auth.learned = s.people.learnUser
 	if s.auth.directory != nil {
 		// The people are the ones who signed in through the provider, not
@@ -377,7 +394,7 @@ func New(opts Options) (*Server, error) {
 	}
 	s.registerAPI(mux)
 	mux.Handle("/", spaHandler(dist))
-	s.handler = logRequests(s.log, limitBody(s.setupGate(clientIDMiddleware(s.csrfGuard(s.actorMiddleware(s.accessMiddleware(s.actionMiddleware(staleMiddleware(s.recordWriteGuard(mux))))))))))
+	s.handler = logRequests(s.log, limitBody(s.setupGate(clientIDMiddleware(s.csrfGuard(s.serviceMiddleware(s.actorMiddleware(s.accessMiddleware(s.actionMiddleware(staleMiddleware(s.recordWriteGuard(mux)))))))))))
 	return s, nil
 }
 
@@ -563,6 +580,11 @@ func (s *Server) actorMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) tokenForRequest(r *http.Request) (token, login string, err error) {
+	if acct, ok := serviceFrom(r.Context()); ok {
+		// A service token: the login its line names, and no token — the
+		// forge is asked about it with the server's own credential.
+		return "", acct.login, nil
+	}
 	if s.auth != nil {
 		sess, ok := s.auth.session(r)
 		if !ok {

@@ -318,6 +318,47 @@ func (g *github) readersOneByOne(ctx context.Context, client *http.Client, serve
 	return out, nil
 }
 
+// Permission asks GET /repos/{slug}/collaborators/{login}/permission with
+// the server credential: admin and write (maintain is reported as write)
+// push, read (triage too) reads, none or no collaborator (404) is neither.
+func (g *github) Permission(ctx context.Context, client *http.Client, serverToken, repoURL, login string) (read, write bool, err error) {
+	if serverToken == "" {
+		return false, false, errors.New("no server credential to ask the forge with")
+	}
+	slug, err := g.RepoRef(repoURL)
+	if err != nil {
+		return false, false, err
+	}
+	resp, err := g.get(ctx, client, serverToken, "/repos/"+slug+"/collaborators/"+url.PathEscape(login)+"/permission")
+	if err != nil {
+		return false, false, err
+	}
+	switch {
+	case throttled(resp):
+		_ = resp.Body.Close()
+		return false, false, fmt.Errorf("%w: %s", ErrRateLimited, resp.Status)
+	case resp.StatusCode == http.StatusNotFound:
+		_ = resp.Body.Close()
+		return false, false, nil
+	case resp.StatusCode/100 != 2:
+		_ = resp.Body.Close()
+		return false, false, fmt.Errorf("forge answered %s for the server credential", resp.Status)
+	}
+	var body struct {
+		Permission string `json:"permission"`
+	}
+	if err := decodeJSON(resp, &body); err != nil {
+		return false, false, err
+	}
+	switch body.Permission {
+	case "admin", "maintain", "write":
+		return true, true, nil
+	case "triage", "read":
+		return true, false, nil
+	}
+	return false, false, nil
+}
+
 // Lookup builds the person from the login alone: GitHub serves avatars off
 // a CDN by login, no call needed, and the boards know no display names.
 func (g *github) Lookup(_ context.Context, _ *http.Client, _, login string) (Person, error) {

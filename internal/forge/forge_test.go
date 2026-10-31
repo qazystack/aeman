@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -195,10 +196,29 @@ func fakeGitLab(t *testing.T) *httptest.Server {
 			})
 		}
 	})
+	mux.HandleFunc("/api/v4/projects/kvaps%2Faeman-db/members/all/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer server-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		level, ok := map[string]int{"1": 50, "2": 20, "3": 10}[path.Base(r.URL.Path)]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_level": level})
+	})
 	mux.HandleFunc("/api/v4/users", func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Query().Get("username") {
 		case "carol":
-			_ = json.NewEncoder(w).Encode([]map[string]any{{"username": "carol", "name": "Carol", "avatar_url": "https://gitlab.example/uploads/carol.png"}})
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": 4, "username": "carol", "name": "Carol", "avatar_url": "https://gitlab.example/uploads/carol.png"}})
+		case "alice":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": 1, "username": "alice"}})
+		case "bob":
+			// The search is a prefix match: the exact login is picked out of it.
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": 9, "username": "bobby"}, {"id": 2, "username": "bob"}})
+		case "guest":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": 3, "username": "guest"}})
 		default:
 			_ = json.NewEncoder(w).Encode([]map[string]any{})
 		}
@@ -696,5 +716,57 @@ func TestTheFakeForgesClientRefusesANonLoopbackHost(t *testing.T) {
 		t.Fatal("the helper's client left the machine")
 	} else if !strings.Contains(err.Error(), "tried to reach") {
 		t.Fatalf("error = %v; want the guard's refusal", err)
+	}
+}
+
+// Permission is what the server's credential says a login may do with a
+// repository — the question a service token's rights are decided by, since
+// such a caller has no forge token of its own to ask with. GitHub's
+// collaborator permission: admin, maintain and write push; triage and read
+// read; none, or no collaborator at all (404), is neither. GitLab's member
+// access level, inherited included: Developer pushes, Reporter reads, a
+// Guest or a non-member is neither. The login is matched exactly, not by
+// the user search's prefix. A credential the forge refuses is an error, and
+// NOT ErrBadToken: that one means the visitor's own sign-in is gone.
+func TestPermissionIsAskedWithTheServerCredential(t *testing.T) {
+	ctx := context.Background()
+	gh := fakeGitHub(t)
+	gl := fakeGitLab(t)
+	for name, tc := range map[string]struct {
+		f           Forge
+		srv         *httptest.Server
+		repo, login string
+		read, write bool
+	}{
+		"github admin":         {NewGitHubAt(gh.URL), gh, "https://github.com/acme/aeman-db", "alice", true, true},
+		"github read":          {NewGitHubAt(gh.URL), gh, "https://github.com/acme/aeman-db", "bob", true, false},
+		"github none":          {NewGitHubAt(gh.URL), gh, "https://github.com/acme/aeman-db", "nobody", false, false},
+		"github stranger":      {NewGitHubAt(gh.URL), gh, "https://github.com/acme/aeman-db", "mallory", false, false},
+		"gitlab owner":         {NewGitLab(gl.URL), gl, "https://gitlab.com/kvaps/aeman-db.git", "alice", true, true},
+		"gitlab reporter":      {NewGitLab(gl.URL), gl, "https://gitlab.com/kvaps/aeman-db.git", "bob", true, false},
+		"gitlab guest":         {NewGitLab(gl.URL), gl, "https://gitlab.com/kvaps/aeman-db.git", "guest", false, false},
+		"gitlab not a member":  {NewGitLab(gl.URL), gl, "https://gitlab.com/kvaps/aeman-db.git", "carol", false, false},
+		"gitlab no such login": {NewGitLab(gl.URL), gl, "https://gitlab.com/kvaps/aeman-db.git", "nobody", false, false},
+	} {
+		read, write, err := tc.f.Permission(ctx, guardedClient(tc.srv), "server-token", tc.repo, tc.login)
+		if err != nil || read != tc.read || write != tc.write {
+			t.Errorf("%s: Permission = %v %v %v; want %v %v", name, read, write, err, tc.read, tc.write)
+		}
+	}
+	for name, f := range map[string]struct {
+		f    Forge
+		srv  *httptest.Server
+		repo string
+	}{
+		"github": {NewGitHubAt(gh.URL), gh, "https://github.com/acme/aeman-db"},
+		"gitlab": {NewGitLab(gl.URL), gl, "https://gitlab.com/kvaps/aeman-db.git"},
+	} {
+		_, _, err := f.f.Permission(ctx, guardedClient(f.srv), "wrong-token", f.repo, "alice")
+		if err == nil || errors.Is(err, ErrBadToken) {
+			t.Errorf("%s: a refused server credential = %v; want an error that is not ErrBadToken", name, err)
+		}
+		if _, _, err := f.f.Permission(ctx, guardedClient(f.srv), "", f.repo, "alice"); err == nil {
+			t.Errorf("%s: without a server credential there is nobody to ask the forge as", name)
+		}
 	}
 }

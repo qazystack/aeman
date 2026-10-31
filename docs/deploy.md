@@ -133,7 +133,7 @@ ingress:
 helm install aeman charts/aeman -n aeman -f values.yaml
 ```
 
-The rest follows the same variables: `repoTokens` gives a repository its own `AEMAN_GIT_TOKEN_<NAME>` (the name derived from the domain by the server's rule), `githubApp.id` with `githubApp.existingSecret` mounts the App's private key as a file for `AEMAN_GITHUB_APP_KEY_FILE`, and `config`, `timezone`, `scopes`, `extraEnv` and `extraArgs` cover the rest. Settings the server would refuse at start — an OAuth Secret without `forge.kind` or `baseUrl`, a `forge.url` on GitHub, more than one replica — fail the render instead. Without `oauth.existingSecret` the pod runs in the single-user local mode as whoever `AEMAN_GIT_TOKEN` belongs to. `charts/aeman/values.yaml` documents every key; `make chart` lints the chart and checks what it renders.
+The rest follows the same variables: `repoTokens` gives a repository its own `AEMAN_GIT_TOKEN_<NAME>` (the name derived from the domain by the server's rule), `githubApp.id` with `githubApp.existingSecret` mounts the App's private key as a file for `AEMAN_GITHUB_APP_KEY_FILE`, `serviceTokens.existingSecret` (the file under `serviceTokens.key`, default `tokens`) mounts the [service tokens](#service-tokens-for-agents-and-bots-optional) file read-only for `AEMAN_SERVICE_TOKENS_FILE` — as a directory, so an edited Secret reaches the pod and the server re-reads it without a restart — and `config`, `timezone`, `scopes`, `extraEnv` and `extraArgs` cover the rest. Settings the server would refuse at start — an OAuth Secret without `forge.kind` or `baseUrl`, a `forge.url` on GitHub, more than one replica — fail the render instead. Without `oauth.existingSecret` the pod runs in the single-user local mode as whoever `AEMAN_GIT_TOKEN` belongs to. `charts/aeman/values.yaml` documents every key; `make chart` lints the chart and checks what it renders.
 
 ## Sign in with an OIDC provider (optional)
 
@@ -175,6 +175,19 @@ The issuer must be https, and its discovery document (`<issuer>/.well-known/open
 **Who can be assigned.** aeman learns people from the provider when they sign in and keeps a directory of them — login, name, avatar, groups, last sign-in — in `AEMAN_SESSION_FILE`, next to the sessions (it never holds a token). The assignee pickers offer the people in it whose groups can read the card's domain. **Someone who has never signed in is not in the directory, so they cannot be assigned yet**: ask them to sign in once.
 
 MCP clients connecting to `https://aeman.example.com/mcp` sign in through the same provider.
+
+## Service tokens for agents and bots (optional)
+
+A client that cannot sign in through a browser — an agent with an account of its own, a bot — uses a **service token**: `Authorization: Bearer aeman_svc_…` on `/api/v1` or `/mcp`, acting as a login you name. Make one with
+
+```sh
+aeman token new --login agent-bot            # the forge mode
+aeman token new --login agent-bot --groups engineering   # the OIDC mode
+```
+
+It prints the token — hand it to the client; it is not shown again — and a line such as `agent-bot 3f…9a groups=engineering`. Put the lines in a file the server reads (in Kubernetes, a Secret mounted as a file) and point `AEMAN_SERVICE_TOKENS_FILE` at it. The file holds only the SHA-256 of each token, never the token. It is re-read when it changes: add a line and the token works on the next request; remove it and the token stops working on the next request, with no restart. A file that stops parsing accepts no service token until it is fixed.
+
+What the token may do is decided like a person's rights. **Forge mode:** the login must be a real account on the forge with access to the repositories — the server asks the forge with its own credential (GitHub: a collaborator with read or write; GitLab: a member, Reporter reads, Developer writes; Gitea / Forgejo: a collaborator, owner or organisation team member with read or write). **OIDC mode:** the login need not exist anywhere; the line's `groups=` go through the `AEMAN_OIDC_ACCESS` rules, and a line no rule opens a domain to is refused. Either way the commits it makes are authored with its login.
 
 ## Choosing the forge (optional)
 

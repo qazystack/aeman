@@ -116,6 +116,10 @@ spec:
             - name: AEMAN_GITHUB_APP_KEY_FILE
               value: /etc/aeman/github-app/{{ .Values.githubApp.key }}
             {{- end }}
+            {{- if .Values.serviceTokens.existingSecret }}
+            - name: AEMAN_SERVICE_TOKENS_FILE
+              value: /etc/aeman/service-tokens/{{ .Values.serviceTokens.key }}
+            {{- end }}
             {{- with .Values.session.existingSecret }}
             - name: AEMAN_SESSION_KEY
               valueFrom:
@@ -135,6 +139,11 @@ spec:
             {{- if .Values.githubApp.existingSecret }}
             - name: github-app
               mountPath: /etc/aeman/github-app
+              readOnly: true
+            {{- end }}
+            {{- if .Values.serviceTokens.existingSecret }}
+            - name: service-tokens
+              mountPath: /etc/aeman/service-tokens
               readOnly: true
             {{- end }}
           {{- with .Values.startupProbe }}
@@ -174,6 +183,14 @@ spec:
             items:
               - key: {{ $.Values.githubApp.key }}
                 path: {{ $.Values.githubApp.key }}
+        {{- end }}
+        {{- with .Values.serviceTokens.existingSecret }}
+        - name: service-tokens
+          secret:
+            secretName: {{ . }}
+            items:
+              - key: {{ $.Values.serviceTokens.key }}
+                path: {{ $.Values.serviceTokens.key }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

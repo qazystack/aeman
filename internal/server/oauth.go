@@ -32,6 +32,10 @@ const githubTokenExtraKey = "github_token"
 // exact session instead of leaving the client to retry a dead one forever.
 const sessionIDExtraKey = "aeman_session"
 
+// serviceExtraKey carries the service account a service token (G82) acts
+// as, for the middleware that decides its rights.
+const serviceExtraKey = "aeman_service"
+
 // registerOAuthServer wires the OAuth 2.0 authorization-server endpoints that
 // front the MCP transport: metadata discovery, dynamic client registration, the
 // authorize redirect and the token endpoint. It is only mounted in OAuth mode.
@@ -466,6 +470,20 @@ func (a *authManager) handleToken(w http.ResponseWriter, r *http.Request) {
 // verifyToken is the auth.TokenVerifier backing /mcp: it maps a bearer token
 // (= session id) to its TokenInfo, carrying the user's GitHub token in Extra.
 func (a *authManager) verifyToken(ctx context.Context, token string, _ *http.Request) (*auth.TokenInfo, error) {
+	if isServiceToken(token) {
+		// A service token (G82) is not a session: it is checked against
+		// the file now and re-checked on every request, so its info lives
+		// only as long as one access answer.
+		acct, ok := a.services.lookup(token)
+		if !ok {
+			return nil, fmt.Errorf("unknown service token: %w", auth.ErrInvalidToken)
+		}
+		return &auth.TokenInfo{
+			UserID:     acct.login,
+			Expiration: time.Now().Add(accessTTL),
+			Extra:      map[string]any{serviceExtraKey: acct},
+		}, nil
+	}
 	// Through the same gate the web session uses: it renews an expiring
 	// GitHub token in place, which is what stops the MCP token "slipping"
 	// every eight hours while the aeman session behind it is still live.
