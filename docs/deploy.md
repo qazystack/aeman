@@ -115,6 +115,19 @@ The issuer must be https, and its discovery document (`<issuer>/.well-known/open
 
 MCP clients connecting to `https://aeman.example.com/mcp` sign in through the same provider.
 
+## Service tokens for agents and bots (optional)
+
+A client that cannot sign in through a browser — an agent with an account of its own, a bot — uses a **service token**: `Authorization: Bearer aeman_svc_…` on `/api/v1` or `/mcp`, acting as a login you name. Make one with
+
+```sh
+aeman token new --login agent-bot            # the forge mode
+aeman token new --login agent-bot --groups engineering   # the OIDC mode
+```
+
+It prints the token — hand it to the client; it is not shown again — and a line such as `agent-bot 3f…9a groups=engineering`. Put the lines in a file the server reads (in Kubernetes, a Secret mounted as a file) and point `AEMAN_SERVICE_TOKENS_FILE` at it. The file holds only the SHA-256 of each token, never the token. It is re-read when it changes: add a line and the token works on the next request; remove it and the token stops working on the next request, with no restart. A file that stops parsing accepts no service token until it is fixed.
+
+What the token may do is decided like a person's rights. **Forge mode:** the login must be a real account on the forge with access to the repositories — the server asks the forge with its own credential (GitHub: a collaborator with read or write; GitLab: a member, Reporter reads, Developer writes). **OIDC mode:** the login need not exist anywhere; the line's `groups=` go through the `AEMAN_OIDC_ACCESS` rules, and a line no rule opens a domain to is refused. Either way the commits it makes are authored with its login.
+
 ## Choosing the forge (optional)
 
 `AEMAN_FORGE=github|gitlab` names the forge explicitly. Unset, it follows the primary repository's host: `github.com` → GitHub, a host containing `gitlab` → GitLab, anything else → GitHub unless `AEMAN_GITLAB_URL` is set. A self-hosted GitLab on a host without `gitlab` in its name therefore needs `AEMAN_GITLAB_URL` (or `AEMAN_FORGE=gitlab`, in which case the URL defaults to `https://<host of the primary repository>`).

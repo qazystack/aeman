@@ -142,6 +142,10 @@ type forgeAccess struct {
 	mu      sync.Mutex
 	cache   map[string]cachedRights // by login
 	members map[string]cachedBool   // by domain + login
+	// services is the service logins' answers (G82), asked with the
+	// server's credential; kept apart from cache, which a person's own
+	// token fills.
+	services map[string]cachedRights // by login
 	// asked is when the forge was last asked about a login, answer or no
 	// answer: a question that came back empty must not look unasked.
 	asked map[string]time.Time // by domain + login
@@ -492,6 +496,17 @@ func (s *Server) accessMiddleware(next http.Handler) http.Handler {
 		if s.access == nil {
 			// Open access (the local server): no rights to decide.
 			next.ServeHTTP(w, r)
+			return
+		}
+		if acct, ok := serviceFrom(r.Context()); ok {
+			// A service token has no forge or provider token to be asked
+			// with: its rights are decided for its login (G82).
+			rights, err := s.serviceRights(r.Context(), acct)
+			if err != nil {
+				writeProblem(w, problem(http.StatusForbidden, "accessUndecided", "access could not be decided: "+err.Error()))
+				return
+			}
+			next.ServeHTTP(w, r.WithContext(withRights(r.Context(), rights)))
 			return
 		}
 		tok, login, err := s.apiTokens(r)

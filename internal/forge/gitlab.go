@@ -2,6 +2,7 @@ package forge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -229,6 +230,81 @@ func (g *gitlab) Readers(ctx context.Context, client *http.Client, serverToken, 
 		}
 	}
 	return out, nil
+}
+
+// Permission finds the login's user id (the user search, matched exactly)
+// and asks GET /projects/{path}/members/all/{id} with the server
+// credential: the member's access level, inherited included — Reporter
+// reads, Developer pushes. A login with no account or no membership (404)
+// is neither; a public project is NOT taken to read for a service caller,
+// which is granted only what it was made a member for.
+func (g *gitlab) Permission(ctx context.Context, client *http.Client, serverToken, repoURL, login string) (read, write bool, err error) {
+	if serverToken == "" {
+		return false, false, errors.New("no server credential to ask the forge with")
+	}
+	ref, err := g.RepoRef(repoURL)
+	if err != nil {
+		return false, false, err
+	}
+	id, err := g.userID(ctx, client, serverToken, login)
+	if errors.Is(err, ErrNotFound) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	resp, err := g.get(ctx, client, serverToken, "/projects/"+ref+"/members/all/"+strconv.FormatInt(id, 10))
+	if err != nil {
+		return false, false, err
+	}
+	switch {
+	case throttled(resp):
+		_ = resp.Body.Close()
+		return false, false, fmt.Errorf("%w: %s", ErrRateLimited, resp.Status)
+	case resp.StatusCode == http.StatusNotFound:
+		_ = resp.Body.Close()
+		return false, false, nil
+	case resp.StatusCode/100 != 2:
+		_ = resp.Body.Close()
+		return false, false, fmt.Errorf("forge answered %s for the server credential", resp.Status)
+	}
+	var m struct {
+		AccessLevel int `json:"access_level"`
+	}
+	if err := decodeJSON(resp, &m); err != nil {
+		return false, false, err
+	}
+	return m.AccessLevel >= gitlabReporter, m.AccessLevel >= gitlabDeveloper, nil
+}
+
+// userID is a login's numeric id: the user search is a prefix match, so the
+// exact username is picked out of its answer. No such user is ErrNotFound.
+func (g *gitlab) userID(ctx context.Context, client *http.Client, token, login string) (int64, error) {
+	resp, err := g.get(ctx, client, token, "/users?username="+url.QueryEscape(login))
+	if err != nil {
+		return 0, err
+	}
+	switch {
+	case throttled(resp):
+		_ = resp.Body.Close()
+		return 0, fmt.Errorf("%w: %s", ErrRateLimited, resp.Status)
+	case resp.StatusCode/100 != 2:
+		_ = resp.Body.Close()
+		return 0, fmt.Errorf("forge answered %s for the server credential", resp.Status)
+	}
+	var users []struct {
+		ID       int64  `json:"id"`
+		Username string `json:"username"`
+	}
+	if err := decodeJSON(resp, &users); err != nil {
+		return 0, err
+	}
+	for _, u := range users {
+		if strings.EqualFold(u.Username, login) {
+			return u.ID, nil
+		}
+	}
+	return 0, ErrNotFound
 }
 
 // Lookup asks the user directory for a login: an avatar on GitLab is an

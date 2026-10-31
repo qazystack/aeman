@@ -86,6 +86,13 @@ func stampMCPAction(be *storeBackend) func(mcp.MethodHandler) mcp.MethodHandler 
 // HTTP accessMiddleware makes for a browser visitor.
 func (s *Server) injectRights(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		if acct, ok := serviceFrom(ctx); ok && s.access != nil {
+			rights, err := s.serviceRights(ctx, acct)
+			if err != nil {
+				return nil, fmt.Errorf("access could not be decided: %w", err)
+			}
+			return next(withRights(ctx, rights), method, req)
+		}
 		if s.access != nil {
 			tok, _ := ctx.Value(mcpTokenCtxKey{}).(string)
 			login, _ := ctx.Value(mcpLoginCtxKey{}).(string)
@@ -108,6 +115,9 @@ func injectGitHubToken(next mcp.MethodHandler) mcp.MethodHandler {
 		if extra := req.GetExtra(); extra != nil && extra.TokenInfo != nil {
 			if tok, ok := extra.TokenInfo.Extra[githubTokenExtraKey].(string); ok && tok != "" {
 				ctx = context.WithValue(ctx, mcpTokenCtxKey{}, tok)
+			}
+			if acct, ok := extra.TokenInfo.Extra[serviceExtraKey].(serviceAccount); ok {
+				ctx = withService(ctx, acct)
 			}
 			if extra.TokenInfo.UserID != "" {
 				ctx = context.WithValue(ctx, mcpLoginCtxKey{}, extra.TokenInfo.UserID)

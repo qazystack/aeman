@@ -165,6 +165,8 @@ type authManager struct {
 	directory  *oidcDirectory
 	admit      func(oidcPerson) error
 	loginFlows map[string]loginFlow
+	// services are the static service tokens (G82); nil without a file.
+	services *serviceTokens
 	// renewAhead is how early a session's token is renewed before it
 	// expires (tokenRenewAhead for the forge; shorter for OIDC providers,
 	// whose access tokens often live minutes).

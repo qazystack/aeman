@@ -122,6 +122,13 @@ type Forge interface {
 	// with the server's credential, keyed by login — with whatever the forge
 	// said about each on the way (a member list carries names and avatars).
 	Readers(ctx context.Context, client *http.Client, serverToken, repoURL string, logins []string) (map[string]Person, error)
+	// Permission asks, with the server's credential, what a login may do
+	// with the repository: read it, write it. It is how a caller with no
+	// forge token of its own — a service token — has its rights decided.
+	// A login that is no member is (false, false, nil); a credential the
+	// forge refuses is an error, never ErrBadToken (that names the
+	// visitor's own token).
+	Permission(ctx context.Context, client *http.Client, serverToken, repoURL, login string) (read, write bool, err error)
 	// Lookup finds a person by login. It may or may not call the forge.
 	Lookup(ctx context.Context, client *http.Client, token, login string) (Person, error)
 
