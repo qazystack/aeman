@@ -93,7 +93,7 @@ implementation of it plus a sign-in flow; the domain, the board service, the sto
   comes from the forge.
 - Done when: CI green, the sign-in test passes end to end, and nothing under `pkg/` changed.
 
-## 5. Service tokens for agents and other non-interactive clients — next
+## 5. Service tokens for agents and other non-interactive clients — done
 Today every API and MCP caller is a browser session (or an MCP client that went through the browser OAuth flow), so a
 service that works the board for an agent account has no credential to use. Add static service tokens.
 - `AEMAN_SERVICE_TOKENS_FILE`: a file (mounted from a Secret) with one entry per line: `<login> <sha256-hex of the token>`
