@@ -92,3 +92,18 @@ implementation of it plus a sign-in flow; the domain, the board service, the sto
   claim example, the access rules); `docs/api.md` configuration table; `docs/design/git-backend.md` where it says identity
   comes from the forge.
 - Done when: CI green, the sign-in test passes end to end, and nothing under `pkg/` changed.
+
+## 5. Service tokens for agents and other non-interactive clients
+Today every API and MCP caller is a browser session (or an MCP client that went through the browser OAuth flow), so a
+service that works the board for an agent account has no credential to use. Add static service tokens.
+- `AEMAN_SERVICE_TOKENS_FILE`: a file (mounted from a Secret) with one entry per line: `<login> <sha256-hex of the token>`
+  and, in OIDC mode, `groups=<g1,g2>`. The server holds hashes only; a token itself is never logged or stored.
+- `aeman token new --login <login>` prints a fresh random token (prefix `aeman_svc_`, ≥ 32 random bytes) and the line to add.
+- `Authorization: Bearer aeman_svc_…` on `/api/v1` and `/mcp` acts as that login. Rights are decided the same way as for a
+  person: forge mode — the server's credential asks the forge whether that login can read/write each domain; OIDC mode —
+  the line's groups through the `--oidc-access` rules. Constant-time comparison; an unknown token is 401
+  (`notAuthenticated`); the file is re-read when it changes.
+- Commits made with a service token are authored with its login, like a person's.
+- Tests first (both modes, unknown/removed token, rights, file reload, the MCP path); docs in `docs/api.md`
+  ("Authentication and access") and `docs/deploy.md`; a behaviour-matrix row. Chart: an optional `serviceTokens.existingSecret`.
+- Done when: CI green and an API call with a service token creates a card authored by its login in a test.
