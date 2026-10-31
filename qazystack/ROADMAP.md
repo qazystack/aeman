@@ -38,7 +38,7 @@ incl. the Gitea ones). Keep the chart at `charts/aeman/`, where upstream put it.
 - Done when: `helm lint` clean, `helm template` renders with defaults and with an Ingress, chart version and app version are
   separate fields.
 
-## 3. CI: golangci-lint fails on the current Go 1.27 patch — next
+## 3. CI: golangci-lint fails on the current Go 1.27 patch — done
 `ci.yml` pins golangci-lint v2.13.2 and `setup-go` installs the newest Go 1.27 patch; the linter cannot read its export data
 (`could not import internal/goarch … export data version 5 is greater than maximum supported version 4`), so the
 `golangci-lint` job fails on `main` with no code change (upstream's last green run: 2026-10-07).
