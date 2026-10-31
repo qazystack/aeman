@@ -156,6 +156,7 @@ func (s *Server) initGit(opts Options, f forge.Forge) error {
 		}
 		oa := newOIDCAccess(s.auth.oidc, s.auth.directory, opts.Auth.OIDC.Access, names)
 		oa.logger = s.log
+		oa.services = s.auth.services
 		s.auth.admit = oa.admit
 		s.access = oa
 	case opts.Auth != nil:
@@ -267,8 +268,9 @@ func (s *Server) initAuth(opts Options, f forge.Forge) error {
 	s.auth.learned = s.people.learnUser
 	if s.auth.directory != nil {
 		// The people are the ones who signed in through the provider, not
-		// the forge's users of the same name.
-		s.people.lookup = s.auth.directory.lookup
+		// the forge's users of the same name — and the service-token
+		// lines, which are members too (G83).
+		s.people.lookup = lookupWithTokens(s.auth.directory, s.auth.services)
 	}
 	return nil
 }
@@ -346,6 +348,7 @@ func New(opts Options) (*Server, error) {
 	s.store = newBoardStore()
 	s.store.log = s.log
 	s.store.member = s.people.member // the forge the identities come from
+	s.store.extra = s.tokenMembers   // the token logins that are members (G83)
 	if opts.Git != nil {
 		// The claim belongs to the process, not to the store: the
 		// App-not-installed start below fails to open the board and stays

@@ -183,11 +183,14 @@ A client that cannot sign in through a browser — an agent with an account of i
 ```sh
 aeman token new --login agent-bot            # the forge mode
 aeman token new --login agent-bot --groups engineering   # the OIDC mode
+aeman token new --login agent-bot --groups engineering --name "Review Agent"   # with a display name
 ```
 
 It prints the token — hand it to the client; it is not shown again — and a line such as `agent-bot 3f…9a groups=engineering`. Put the lines in a file the server reads (in Kubernetes, a Secret mounted as a file) and point `AEMAN_SERVICE_TOKENS_FILE` at it. The file holds only the SHA-256 of each token, never the token. It is re-read when it changes: add a line and the token works on the next request; remove it and the token stops working on the next request, with no restart. A file that stops parsing accepts no service token until it is fixed.
 
 What the token may do is decided like a person's rights. **Forge mode:** the login must be a real account on the forge with access to the repositories — the server asks the forge with its own credential (GitHub: a collaborator with read or write; GitLab: a member, Reporter reads, Developer writes; Gitea / Forgejo: a collaborator, owner or organisation team member with read or write). **OIDC mode:** the login need not exist anywhere; the line's `groups=` go through the `AEMAN_OIDC_ACCESS` rules, and a line no rule opens a domain to is refused. Either way the commits it makes are authored with its login.
+
+**Agents as board members (OIDC mode).** In the OIDC mode a token's login is a board member: the assignee and reviewer pickers offer it in the domains its `groups=` open, and the boards show it with the line's `name=` (percent-encoded: `name=Review%20Agent`; `aeman token new --name` writes it for you), or with its login when the line has none. A login that is also a person who has signed in keeps the person's name, avatar and groups on the board. Remove the line and the login is no longer offered, at the next re-read; a card already assigned to it keeps the login as text. In the forge mode the forge decides who is a member, as for people, and `name=` is refused.
 
 ## Choosing the forge (optional)
 

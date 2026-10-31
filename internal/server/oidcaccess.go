@@ -114,6 +114,9 @@ type oidcAccess struct {
 	ttl     time.Duration
 	now     func() time.Time
 	logger  *slog.Logger
+	// services is the tokens file, whose lines are members too (G83); nil
+	// without one.
+	services *serviceTokens
 
 	mu    sync.Mutex
 	cache map[string]cachedRights // by login
@@ -210,18 +213,48 @@ func (o *oidcAccess) groups(ctx context.Context, token, login string) ([]string,
 }
 
 // readers is the subset of logins that may read the domain: people in the
-// directory whose last known groups open it. Someone who never signed in
-// is not offered.
+// directory whose last known groups open it, and service-token logins whose
+// line's groups do (G83). A login that is both is the person: their groups
+// decide. Someone who never signed in and has no token line is not offered.
 func (o *oidcAccess) readers(_ context.Context, domain string, logins []string) ([]string, error) {
 	if !slices.Contains(o.domains, domain) {
 		return nil, fmt.Errorf("unknown domain %q", domain)
 	}
+	tokens := o.services.accounts()
 	out := make([]string, 0, len(logins))
 	for _, login := range logins {
-		p, ok := o.dir.get(login)
-		if ok && rightsOf(o.rules, o.domains, p.Groups).canRead(domain) {
+		var groups []string
+		if p, ok := o.dir.get(login); ok {
+			groups = p.Groups
+		} else if a, ok := tokens[login]; ok {
+			groups = a.groups
+		} else {
+			continue
+		}
+		if rightsOf(o.rules, o.domains, groups).canRead(domain) {
 			out = append(out, login)
 		}
 	}
 	return out, nil
+}
+
+// lookupWithTokens is the people source of the OIDC mode: the directory
+// first — a person who signed in is shown as the provider describes them —
+// then a service-token line, shown with its name=, else its login (G83).
+func lookupWithTokens(dir *oidcDirectory, services *serviceTokens) func(context.Context, string) (forge.Person, error) {
+	return func(ctx context.Context, login string) (forge.Person, error) {
+		p, err := dir.lookup(ctx, login)
+		if err == nil || services == nil {
+			return p, err
+		}
+		a, ok := services.accounts()[login]
+		if !ok {
+			return forge.Person{}, forge.ErrNotFound
+		}
+		name := a.name
+		if name == "" {
+			name = login
+		}
+		return forge.Person{Login: login, Name: name}, nil
+	}
 }

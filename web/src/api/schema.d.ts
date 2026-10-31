@@ -1233,7 +1233,7 @@ export interface components {
             processes?: components["schemas"]["ProcessRef"][];
             deadlines?: components["schemas"]["DeadlineRef"][];
             epics?: components["schemas"]["EpicRef"][];
-            /** @description Every distinct assignee on the board, in login order, with the numbers beside each — the people roster the pickers offer. Who may READ a repository is the other list, `domains[].members`. */
+            /** @description Every distinct assignee on the board, in login order, with the numbers beside each — the people roster the pickers offer. In the OIDC mode it also lists each service-token login whose groups open a domain the visitor reads, before any card names it. Who may READ a repository is the other list, `domains[].members`. */
             members: components["schemas"]["Member"][];
             /** @description The repositories the visitor can read, primary first. The board lists its repositories whatever it spans, so a client reads a SINGLE entry as "no boundaries" — by the COUNT, never by the list being absent — and compares the stamps cards and columns carry against these names. */
             domains?: components["schemas"]["DomainInfo"][];

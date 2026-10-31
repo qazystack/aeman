@@ -10,10 +10,16 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+
+	"github.com/aenix-io/aeman/pkg/apiserver"
+	"github.com/aenix-io/aeman/pkg/board"
 )
 
 // Service tokens (G82): static bearer credentials for callers that cannot
@@ -21,13 +27,16 @@ import (
 // account of its own, a bot. The operator mounts a file with one line per
 // token,
 //
-//	<login> <sha256-hex of the token> [groups=<g1,g2>]
+//	<login> <sha256-hex of the token> [groups=<g1,g2>] [name=<display name>]
 //
 // and `Authorization: Bearer aeman_svc_…` on /api/v1 or /mcp then acts as
 // that login. The server holds the hashes only; a token is never logged or
 // stored. Rights are decided as for a person: by the forge, asked with the
 // server's own credential (a service login has no forge token), or — in the
-// OIDC mode — by the line's groups through the --oidc-access rules.
+// OIDC mode — by the line's groups through the --oidc-access rules. In the
+// OIDC mode a line is also a board member (G83): its login is offered as an
+// assignee and reviewer, shown with the line's name= (percent-encoded, a
+// space is %20), else with its login.
 
 // ServiceTokenPrefix starts every service token, so one is told apart from
 // an MCP session token without a lookup, and recognised in a leak.
@@ -52,6 +61,8 @@ func NewServiceToken() (token, hash string, err error) {
 type serviceAccount struct {
 	login  string
 	groups []string
+	// name is the display name the line gives, "" for none (G83).
+	name string
 }
 
 type serviceEntry struct {
@@ -74,7 +85,7 @@ func parseServiceTokens(data []byte) ([]serviceEntry, error) {
 		}
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
-			return nil, fmt.Errorf("line %d: want <login> <sha256-hex> [groups=<g1,g2>]", i+1)
+			return nil, fmt.Errorf("line %d: want <login> <sha256-hex> [groups=<g1,g2>] [name=<display name>]", i+1)
 		}
 		raw, err := hex.DecodeString(fields[1])
 		if err != nil || len(raw) != sha256.Size {
@@ -87,9 +98,20 @@ func parseServiceTokens(data []byte) ([]serviceEntry, error) {
 		}
 		seen[e.hash] = true
 		for _, f := range fields[2:] {
+			if v, ok := strings.CutPrefix(f, "name="); ok {
+				if e.name != "" {
+					return nil, fmt.Errorf("line %d: name= is given twice", i+1)
+				}
+				name, err := serviceName(v)
+				if err != nil {
+					return nil, fmt.Errorf("line %d: %w", i+1, err)
+				}
+				e.name = name
+				continue
+			}
 			v, ok := strings.CutPrefix(f, "groups=")
 			if !ok {
-				return nil, fmt.Errorf("line %d: unknown field %q (only groups=<g1,g2>)", i+1, f)
+				return nil, fmt.Errorf("line %d: unknown field %q (only groups=<g1,g2> and name=<display name>)", i+1, f)
 			}
 			if e.groups != nil {
 				return nil, fmt.Errorf("line %d: groups= is given twice", i+1)
@@ -106,6 +128,24 @@ func parseServiceTokens(data []byte) ([]serviceEntry, error) {
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+// serviceName decodes a name= value: percent-encoded, so a space is %20
+// and the line stays one field per word. A name that decodes to nothing
+// but blanks, or that holds a control character, is refused — it would
+// show as an empty or broken label on every board.
+func serviceName(v string) (string, error) {
+	name, err := url.PathUnescape(v)
+	if err != nil {
+		return "", fmt.Errorf("name= is not percent-encoded (a space is %%20): %w", err)
+	}
+	if strings.IndexFunc(name, unicode.IsControl) >= 0 {
+		return "", errors.New("name= holds a control character")
+	}
+	if name = strings.TrimSpace(name); name == "" {
+		return "", errors.New("name= names nothing")
+	}
+	return name, nil
 }
 
 // serviceTokens is the file, re-read when it changes (its size or
@@ -154,6 +194,9 @@ func (t *serviceTokens) read() ([]serviceEntry, error) {
 			if e.groups != nil {
 				return nil, fmt.Errorf("%s has groups=, which only the OIDC sign-in reads: in the forge mode the forge decides a login's rights", e.login)
 			}
+			if e.name != "" {
+				return nil, fmt.Errorf("%s has name=, which only the OIDC sign-in reads: in the forge mode the forge says who a login is", e.login)
+			}
 		}
 	}
 	return entries, nil
@@ -189,6 +232,33 @@ func (t *serviceTokens) warn(msg string, err error) {
 	if t.log != nil {
 		t.log.Warn(msg, "path", t.path, "err", err)
 	}
+}
+
+// accounts is the logins the file names as they stand now, one account per
+// login (G83). A login on several lines — a token being rotated — is one
+// member: its groups are every line's, and its name the first line's that
+// gives one.
+func (t *serviceTokens) accounts() map[string]serviceAccount {
+	if t == nil {
+		return nil
+	}
+	out := map[string]serviceAccount{}
+	for _, e := range t.current() {
+		a, seen := out[e.login]
+		if !seen {
+			a = serviceAccount{login: e.login}
+		}
+		for _, g := range e.groups {
+			if !slices.Contains(a.groups, g) {
+				a.groups = append(a.groups, g)
+			}
+		}
+		if a.name == "" {
+			a.name = e.name
+		}
+		out[e.login] = a
+	}
+	return out
 }
 
 // lookup is who a token acts as. Every entry is compared, in constant time,
@@ -271,6 +341,58 @@ func (s *Server) serviceRights(ctx context.Context, a serviceAccount) (*domainRi
 		return nil, errNoServiceAccess
 	}
 	return sa.serviceRights(ctx, a)
+}
+
+// tokenMembers is the service-token logins the board lists as members for a
+// visitor with these rights (G83): in the OIDC mode, every line's login
+// whose groups open a domain the visitor reads (nil rights: any domain). The
+// forge mode lists none — there the forge says who a member is — and so
+// does a server without a tokens file.
+func (s *Server) tokenMembers(rights *domainRights) []string {
+	o, ok := s.access.(*oidcAccess)
+	if !ok || o.services == nil {
+		return nil
+	}
+	var out []string
+	for login, a := range o.services.accounts() {
+		mine := rightsOf(o.rules, o.domains, a.groups)
+		if slices.ContainsFunc(o.domains, func(d string) bool { return mine.canRead(d) && rights.canRead(d) }) {
+			out = append(out, login)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// withTokenMembers adds to a board's members the token logins it does not
+// list yet — a login no card names — shaped as MembersOf shapes one: the
+// roster's capacity, no load (nothing is theirs on this board), and the
+// name and avatar the people hook gives. The list stays sorted by login.
+func withTokenMembers(b board.Board, members []apiserver.Member, extra []string, person func(string) apiserver.Member) []apiserver.Member {
+	if len(extra) == 0 {
+		return members
+	}
+	listed := make(map[string]bool, len(members))
+	for _, m := range members {
+		listed[m.Login] = true
+	}
+	added := false
+	for _, login := range extra {
+		if listed[login] {
+			continue
+		}
+		m := apiserver.Member{Login: login, Capacity: board.CapacityOfPerson(b, login)}
+		if person != nil {
+			p := person(login)
+			m.Name, m.AvatarURL = p.Name, p.AvatarURL
+		}
+		members = append(members, m)
+		added = true
+	}
+	if added {
+		slices.SortFunc(members, func(a, b apiserver.Member) int { return strings.Compare(a.Login, b.Login) })
+	}
+	return members
 }
 
 // serviceRights in the OIDC mode: the line's groups through the rules, as a

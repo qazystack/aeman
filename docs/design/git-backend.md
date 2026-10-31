@@ -686,7 +686,9 @@ In the OIDC mode identity does not come from the forge at all: the
 provider signs the visitor in, the ID token's groups (refreshed from
 userinfo every 60 s, the same freshness) decide the rights, and the
 people who may be assigned are the ones who have signed in — the
-directory in the session file. The forge is only the remote, so nothing
+directory in the session file — and the logins of the service-token
+lines, by their lines' groups (G83; a person wins over a line of the
+same login). The forge is only the remote, so nothing
 in the repositories changes: a commit's author is still `{login}` by
 `--author-email`, the login being the provider's.
 

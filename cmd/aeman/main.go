@@ -112,7 +112,7 @@ Usage:
   aeman migrate [flags] Copy a GitHub Projects v2 board into a repository
   aeman login [flags]   Store the forge token in the OS keychain
   aeman logout [flags]  Remove the stored token for the forge
-  aeman token new       Make a service token for an agent or bot (--login, --groups)
+  aeman token new       Make a service token for an agent or bot (--login, --groups, --name)
   aeman version         Print the version
   aeman help            Show this help
 
